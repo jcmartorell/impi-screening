@@ -1,1 +1,9 @@
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+
+app = FastAPI(title="IMPI Screening")
+
+@app.get("/", response_class=HTMLResponse)
+def health():
+    return "<h3>OK</h3><p>Service running</p>"
 
