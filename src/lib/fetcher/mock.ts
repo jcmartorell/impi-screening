@@ -144,17 +144,17 @@ export const MOCK_CATALOG: Record<string, MockSeed> = {
     owner: "Horizonte Legal Abogados S.C.",
     status: "renovacion",
     classNice: "45",
-    grantDate: "2015-09-08",
-    expiryDate: "2026-01-15",
-    lastMovementDate: "2025-10-10",
+    grantDate: "2016-09-08",
+    expiryDate: "2027-01-15",
+    lastMovementDate: "2026-10-10",
     movements: [
       {
-        date: "2025-10-10",
+        date: "2026-10-10",
         description: "Ventana de renovación abierta",
         kind: "renovacion",
       },
       {
-        date: "2015-09-08",
+        date: "2016-09-08",
         description: "Título de registro concedido",
         kind: "concesion",
       },

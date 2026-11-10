@@ -122,7 +122,7 @@ export function seedIfEmpty(db: Database.Database): void {
         expediente: "2345678",
         kind: "expiry_warning",
         title: "Renovación próxima — HORIZONTE LEGAL",
-        body: "La vigencia del expediente 2345678 vence el 2026-01-15. Ventana de renovación abierta.",
+        body: "La vigencia del expediente 2345678 vence el 2027-01-15. Ventana de renovación abierta.",
         createdAt: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString(),
         read: true,
       },
