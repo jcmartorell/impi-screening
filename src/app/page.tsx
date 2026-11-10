@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
-import { getIdentity } from "../../cursor/identity";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
 import { TrackForm } from "@/components/dashboard/track-form";
+import { resolveViewer } from "@/lib/auth";
 import { getFetchMode } from "@/lib/fetcher/marcanet";
 import {
   listExpiringWithin,
@@ -14,9 +14,9 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const identity = await getIdentity(await headers());
+  const viewer = await resolveViewer(await headers());
 
-  if (!identity.verified) {
+  if (!viewer) {
     return (
       <main className="mx-auto flex min-h-full w-full max-w-2xl flex-1 flex-col justify-center gap-4 px-6 py-16">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[color:var(--teal-deep)]">
@@ -33,16 +33,27 @@ export default async function HomePage() {
     );
   }
 
-  const stage = identity.stage === "preview" ? "preview" : "production";
-  const ownerKey = `${identity.sub}::${stage}`;
-  const marks = listTrackedMarks(ownerKey);
-  const notifications = listNotifications(ownerKey, { limit: 30 });
-  const expiring = listExpiringWithin(ownerKey, 120);
+  const marks = listTrackedMarks(viewer.ownerKey);
+  const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
+  const expiring = listExpiringWithin(viewer.ownerKey, 120);
   const mode = getFetchMode();
   const unread = notifications.filter((n) => !n.read).length;
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+      {viewer.demoMode ? (
+        <div
+          role="status"
+          className="animate-rise rounded-lg border border-[color:var(--brass)]/40 bg-[color:var(--brass)]/15 px-4 py-3 text-sm text-[color:var(--ink)]"
+        >
+          <strong className="font-semibold">Modo demo.</strong> Esta vista usa
+          datos de ejemplo (cartera seed). No es un inicio de sesión real con
+          Cursor; en la app publicada con{" "}
+          <code className="font-mono text-xs">CURSOR_APP_ID</code> se exige
+          identidad verificada.
+        </div>
+      ) : null}
+
       <header className="animate-rise flex flex-col gap-6 border-b border-[color:var(--ink)]/10 pb-8 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
           <p className="mb-3 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-[color:var(--teal-deep)]">
@@ -57,8 +68,12 @@ export default async function HomePage() {
             oficios, caducidad y movimientos — con inbox de cambios.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
-            Sesión: {identity.name || "usuario"}
-            {identity.simulated ? " (simulada en local)" : ""}
+            Sesión: {viewer.name || "usuario"}
+            {viewer.demoMode
+              ? " (modo demo)"
+              : viewer.simulated
+                ? " (simulada en local)"
+                : ""}
           </p>
         </div>
         <RefreshButton />
