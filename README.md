@@ -2,6 +2,8 @@
 
 Herramienta para prácticas de PI en México: seguimiento de expedientes IMPI (7 dígitos) después de la concesión — declaración de uso, requerimientos, oficios, caducidad — con inbox de cambios y API de vencimientos.
 
+Este Project reemplaza el stub vacío de [impi-screening](https://github.com/jcmartorell/impi-screening) (FastAPI “OK” en Replit). El producto vive aquí: dashboard Next.js + API + mock Marcanet.
+
 ## Qué incluye (v1)
 
 - Dashboard: alta/listado de marcas, estatus actual, último movimiento, notificaciones in-app
