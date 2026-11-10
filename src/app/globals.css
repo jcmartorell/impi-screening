@@ -49,32 +49,32 @@
 }
 
 :root {
-  --ink: #0b1f2a;
-  --ink-soft: #163445;
-  --paper: #f3eee4;
-  --mist: #e4ece8;
-  --brass: #b08a3c;
-  --brass-soft: #f0e3c4;
-  --teal-deep: #1f5c57;
+  --ink: #102532;
+  --ink-soft: #1c3a4a;
+  --paper: #eef3f4;
+  --mist: #d9e6e3;
+  --brass: #2f7a6d;
+  --brass-soft: #d7ebe6;
+  --teal-deep: #1a5f56;
 
   --background: var(--paper);
   --foreground: var(--ink);
-  --card: #fffdf8;
+  --card: #f7fbfb;
   --card-foreground: var(--ink);
-  --popover: #fffdf8;
+  --popover: #f7fbfb;
   --popover-foreground: var(--ink);
   --primary: var(--ink);
-  --primary-foreground: var(--paper);
+  --primary-foreground: #f4faf9;
   --secondary: var(--mist);
   --secondary-foreground: var(--ink);
-  --muted: #ebe4d7;
-  --muted-foreground: #5b6b73;
+  --muted: #e2eaec;
+  --muted-foreground: #4f646d;
   --accent: var(--brass-soft);
   --accent-foreground: var(--ink);
   --destructive: oklch(0.55 0.2 25);
   --border: color-mix(in oklab, var(--ink) 12%, transparent);
   --input: color-mix(in oklab, var(--ink) 14%, transparent);
-  --ring: var(--brass);
+  --ring: var(--teal-deep);
   --chart-1: var(--teal-deep);
   --chart-2: var(--brass);
   --chart-3: #3d6b8c;
@@ -98,9 +98,9 @@
   body {
     @apply bg-background text-foreground;
     background-image:
-      radial-gradient(1200px 500px at 10% -10%, color-mix(in oklab, var(--brass) 18%, transparent), transparent 60%),
-      radial-gradient(900px 420px at 100% 0%, color-mix(in oklab, var(--teal-deep) 16%, transparent), transparent 55%),
-      linear-gradient(180deg, #f7f2e9 0%, var(--paper) 42%, #e8efe9 100%);
+      radial-gradient(1100px 480px at 8% -12%, color-mix(in oklab, var(--teal-deep) 20%, transparent), transparent 58%),
+      radial-gradient(900px 420px at 100% 0%, color-mix(in oklab, #3d6b8c 14%, transparent), transparent 55%),
+      linear-gradient(180deg, #f4f8f9 0%, var(--paper) 45%, #e5eeeb 100%);
     background-attachment: fixed;
   }
   html {
