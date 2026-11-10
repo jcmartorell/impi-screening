@@ -14,7 +14,13 @@ import {
 } from "@/lib/limits";
 import { seedIfEmpty } from "@/lib/seed";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+/** Vercel/Lambda only allow writes under /tmp; local/dev keep ./data. */
+const IS_SERVERLESS =
+  Boolean(process.env.VERCEL) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
+const DATA_DIR = IS_SERVERLESS
+  ? path.join("/tmp", "impi-data")
+  : path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "impi.sqlite");
 
 let dbSingleton: Database.Database | null = null;
@@ -86,7 +92,8 @@ export function getDb(): Database.Database {
   if (dbSingleton) return dbSingleton;
   ensureDir();
   const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  // WAL needs sidecar files; delete/truncate is safer on ephemeral /tmp.
+  db.pragma(IS_SERVERLESS ? "journal_mode = DELETE" : "journal_mode = WAL");
   migrate(db);
   dbSingleton = db;
   seedIfEmpty(db);
