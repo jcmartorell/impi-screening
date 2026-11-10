@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { jsonPrivate, requireViewer } from "@/lib/auth";
+import { assertRefreshAllowed } from "@/lib/limits";
 import { getTrackedMark, listHistory } from "@/lib/store";
 import { refreshExpediente } from "@/lib/refresh";
 import { buildMockSnapshot } from "@/lib/fetcher/mock";
@@ -9,10 +10,13 @@ export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ expediente: string }> };
 
 export async function GET(request: Request, context: Ctx) {
+  const viewer = await requireViewer(request);
+  if (viewer instanceof Response) return viewer;
+
   const { expediente: raw } = await context.params;
   const expediente = raw.replace(/\D/g, "");
   if (!/^\d{7}$/.test(expediente)) {
-    return NextResponse.json(
+    return jsonPrivate(
       { error: "expediente debe ser de 7 dígitos" },
       { status: 400 },
     );
@@ -22,35 +26,43 @@ export async function GET(request: Request, context: Ctx) {
   const refresh = searchParams.get("refresh") === "1";
 
   if (refresh) {
-    const result = await refreshExpediente(expediente);
+    const limit = assertRefreshAllowed(viewer.ownerKey, "single");
+    if (!limit.ok) {
+      return jsonPrivate(
+        { error: limit.error, retryAfterSec: limit.retryAfterSec },
+        {
+          status: 429,
+          headers: { "Retry-After": String(limit.retryAfterSec) },
+        },
+      );
+    }
+    const result = await refreshExpediente(viewer.ownerKey, expediente);
     if (!result.ok) {
-      return NextResponse.json(result, { status: 502 });
+      return jsonPrivate(result, { status: 502 });
     }
   }
 
-  const tracked = getTrackedMark(expediente);
+  const tracked = getTrackedMark(viewer.ownerKey, expediente);
   if (tracked?.current) {
-    return NextResponse.json({
+    return jsonPrivate({
       tracked: true,
       mark: tracked,
-      history: listHistory(expediente, 10),
+      history: listHistory(viewer.ownerKey, expediente, 10),
     });
   }
 
-  // Untracked lookup: return mock/live snapshot without persisting unless refresh asked
-  const snapshot = refresh
-    ? (await refreshExpediente(expediente)).snapshot
-    : buildMockSnapshot(expediente);
+  // Untracked lookup: public snapshot only; never persist unless already tracked/refreshed above
+  const snapshot = buildMockSnapshot(expediente);
 
-  return NextResponse.json({
+  return jsonPrivate({
     tracked: false,
     mark: {
       expediente,
       clientLabel: "",
       notes: "",
       trackedAt: null,
-      lastRefreshedAt: snapshot?.fetchedAt ?? null,
-      current: snapshot ?? null,
+      lastRefreshedAt: snapshot.fetchedAt,
+      current: snapshot,
     },
     history: [],
   });

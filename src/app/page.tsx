@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+import { getIdentity } from "../../cursor/identity";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
@@ -11,10 +13,31 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
-  const marks = listTrackedMarks();
-  const notifications = listNotifications({ limit: 30 });
-  const expiring = listExpiringWithin(120);
+export default async function HomePage() {
+  const identity = await getIdentity(await headers());
+
+  if (!identity.verified) {
+    return (
+      <main className="mx-auto flex min-h-full w-full max-w-2xl flex-1 flex-col justify-center gap-4 px-6 py-16">
+        <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[color:var(--teal-deep)]">
+          Monitor post-concesión
+        </p>
+        <h1 className="font-[family-name:var(--font-display)] text-5xl tracking-tight text-[color:var(--ink)]">
+          IMPI
+        </h1>
+        <p className="text-base text-muted-foreground">
+          Inicia sesión con Cursor para ver tu cartera. Sin identidad verificada
+          no se exponen expedientes, notas ni notificaciones.
+        </p>
+      </main>
+    );
+  }
+
+  const stage = identity.stage === "preview" ? "preview" : "production";
+  const ownerKey = `${identity.sub}::${stage}`;
+  const marks = listTrackedMarks(ownerKey);
+  const notifications = listNotifications(ownerKey, { limit: 30 });
+  const expiring = listExpiringWithin(ownerKey, 120);
   const mode = getFetchMode();
   const unread = notifications.filter((n) => !n.read).length;
 
@@ -32,6 +55,10 @@ export default function HomePage() {
           <p className="mt-3 max-w-xl text-base leading-relaxed text-[color:var(--ink-soft)]/90 sm:text-lg">
             Cartera de marcas por expediente: declaración de uso, requerimientos,
             oficios, caducidad y movimientos — con inbox de cambios.
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Sesión: {identity.name || "usuario"}
+            {identity.simulated ? " (simulada en local)" : ""}
           </p>
         </div>
         <RefreshButton />
@@ -95,6 +122,7 @@ export default function HomePage() {
       <footer className="mt-auto border-t border-[color:var(--ink)]/10 pt-6 text-xs text-muted-foreground">
         Capas: trigger/refresh → fetcher Marcanet/SIGA (mock fallback) → parser/diff →
         notifier in-app. PASE autenticado, MARCia y WhatsApp quedan fuera de v1.
+        Cartera aislada por identidad Cursor; límites de alta y refresh activos.
       </footer>
     </main>
   );

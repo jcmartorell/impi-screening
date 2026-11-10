@@ -7,6 +7,11 @@ import type {
   TrackedMark,
   TrademarkSnapshot,
 } from "@/lib/types";
+import {
+  MAX_HISTORY_PER_MARK,
+  MAX_NOTIFICATIONS_PER_OWNER,
+  MAX_TRACKED_MARKS_PER_OWNER,
+} from "@/lib/limits";
 import { seedIfEmpty } from "@/lib/seed";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -21,18 +26,35 @@ function ensureDir() {
 }
 
 function migrate(db: Database.Database) {
+  const cols = db
+    .prepare(`PRAGMA table_info(tracked_marks)`)
+    .all() as { name: string }[];
+  const hasOwner = cols.some((c) => c.name === "owner_key");
+
+  if (cols.length > 0 && !hasOwner) {
+    // Dev/demo DB from v1 without ownership — rebuild so authz is enforceable.
+    db.exec(`
+      DROP TABLE IF EXISTS tracked_marks;
+      DROP TABLE IF EXISTS status_history;
+      DROP TABLE IF EXISTS notifications;
+    `);
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS tracked_marks (
-      expediente TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
+      expediente TEXT NOT NULL,
       client_label TEXT NOT NULL DEFAULT '',
       notes TEXT NOT NULL DEFAULT '',
       tracked_at TEXT NOT NULL,
       last_refreshed_at TEXT,
-      current_json TEXT
+      current_json TEXT,
+      PRIMARY KEY (owner_key, expediente)
     );
 
     CREATE TABLE IF NOT EXISTS status_history (
       id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
       expediente TEXT NOT NULL,
       status TEXT NOT NULL,
       status_label TEXT NOT NULL,
@@ -43,6 +65,7 @@ function migrate(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
+      owner_key TEXT NOT NULL,
       expediente TEXT NOT NULL,
       kind TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -51,8 +74,11 @@ function migrate(db: Database.Database) {
       read INTEGER NOT NULL DEFAULT 0
     );
 
-    CREATE INDEX IF NOT EXISTS idx_history_exp ON status_history(expediente, recorded_at);
-    CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_marks_owner ON tracked_marks(owner_key);
+    CREATE INDEX IF NOT EXISTS idx_history_owner_exp
+      ON status_history(owner_key, expediente, recorded_at);
+    CREATE INDEX IF NOT EXISTS idx_notif_owner_created
+      ON notifications(owner_key, created_at DESC);
   `);
 }
 
@@ -82,35 +108,58 @@ function mapTracked(row: Record<string, unknown>): TrackedMark {
   };
 }
 
-export function listTrackedMarks(): TrackedMark[] {
+export function countTrackedForOwner(ownerKey: string): number {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT COUNT(*) AS c FROM tracked_marks WHERE owner_key = ?`)
+    .get(ownerKey) as { c: number };
+  return row.c;
+}
+
+export function listTrackedMarks(ownerKey: string): TrackedMark[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT * FROM tracked_marks ORDER BY
+      `SELECT * FROM tracked_marks WHERE owner_key = ? ORDER BY
         CASE WHEN current_json IS NULL THEN 1 ELSE 0 END,
         tracked_at DESC`,
     )
-    .all() as Record<string, unknown>[];
+    .all(ownerKey) as Record<string, unknown>[];
   return rows.map(mapTracked);
 }
 
-export function getTrackedMark(expediente: string): TrackedMark | null {
+export function getTrackedMark(
+  ownerKey: string,
+  expediente: string,
+): TrackedMark | null {
   const db = getDb();
   const row = db
-    .prepare(`SELECT * FROM tracked_marks WHERE expediente = ?`)
-    .get(expediente) as Record<string, unknown> | undefined;
+    .prepare(
+      `SELECT * FROM tracked_marks WHERE owner_key = ? AND expediente = ?`,
+    )
+    .get(ownerKey, expediente) as Record<string, unknown> | undefined;
   return row ? mapTracked(row) : null;
 }
 
 export function upsertTrackedMark(input: {
+  ownerKey: string;
   expediente: string;
   clientLabel?: string;
   notes?: string;
   current?: TrademarkSnapshot | null;
   lastRefreshedAt?: string | null;
-}): TrackedMark {
+  /** When true, refuse insert if owner is at cap (updates still allowed). */
+  enforceCap?: boolean;
+}): TrackedMark | { error: "cap_exceeded"; max: number } {
   const db = getDb();
-  const existing = getTrackedMark(input.expediente);
+  const existing = getTrackedMark(input.ownerKey, input.expediente);
+  if (!existing && input.enforceCap) {
+    const count = countTrackedForOwner(input.ownerKey);
+    if (count >= MAX_TRACKED_MARKS_PER_OWNER) {
+      return { error: "cap_exceeded", max: MAX_TRACKED_MARKS_PER_OWNER };
+    }
+  }
+
   const trackedAt = existing?.trackedAt ?? new Date().toISOString();
   const clientLabel = input.clientLabel ?? existing?.clientLabel ?? "";
   const notes = input.notes ?? existing?.notes ?? "";
@@ -122,14 +171,16 @@ export function upsertTrackedMark(input: {
       : input.lastRefreshedAt;
 
   db.prepare(
-    `INSERT INTO tracked_marks (expediente, client_label, notes, tracked_at, last_refreshed_at, current_json)
-     VALUES (@expediente, @client_label, @notes, @tracked_at, @last_refreshed_at, @current_json)
-     ON CONFLICT(expediente) DO UPDATE SET
+    `INSERT INTO tracked_marks
+      (owner_key, expediente, client_label, notes, tracked_at, last_refreshed_at, current_json)
+     VALUES (@owner_key, @expediente, @client_label, @notes, @tracked_at, @last_refreshed_at, @current_json)
+     ON CONFLICT(owner_key, expediente) DO UPDATE SET
        client_label = excluded.client_label,
        notes = excluded.notes,
        last_refreshed_at = excluded.last_refreshed_at,
        current_json = excluded.current_json`,
   ).run({
+    owner_key: input.ownerKey,
     expediente: input.expediente,
     client_label: clientLabel,
     notes,
@@ -138,25 +189,21 @@ export function upsertTrackedMark(input: {
     current_json: current ? JSON.stringify(current) : null,
   });
 
-  return getTrackedMark(input.expediente)!;
+  return getTrackedMark(input.ownerKey, input.expediente)!;
 }
 
-export function deleteTrackedMark(expediente: string): boolean {
-  const db = getDb();
-  const info = db
-    .prepare(`DELETE FROM tracked_marks WHERE expediente = ?`)
-    .run(expediente);
-  return info.changes > 0;
-}
-
-export function addHistoryEntry(entry: StatusHistoryEntry): void {
+export function addHistoryEntry(
+  ownerKey: string,
+  entry: StatusHistoryEntry,
+): void {
   const db = getDb();
   db.prepare(
     `INSERT INTO status_history
-      (id, expediente, status, status_label, last_movement_date, snapshot_json, recorded_at)
-     VALUES (@id, @expediente, @status, @status_label, @last_movement_date, @snapshot_json, @recorded_at)`,
+      (id, owner_key, expediente, status, status_label, last_movement_date, snapshot_json, recorded_at)
+     VALUES (@id, @owner_key, @expediente, @status, @status_label, @last_movement_date, @snapshot_json, @recorded_at)`,
   ).run({
     id: entry.id,
+    owner_key: ownerKey,
     expediente: entry.expediente,
     status: entry.status,
     status_label: entry.statusLabel,
@@ -164,36 +211,38 @@ export function addHistoryEntry(entry: StatusHistoryEntry): void {
     snapshot_json: JSON.stringify(entry.snapshot),
     recorded_at: entry.recordedAt,
   });
-}
 
-export function getLatestHistory(expediente: string): StatusHistoryEntry | null {
-  const db = getDb();
-  const row = db
+  // Cap history growth per mark
+  const overflow = db
     .prepare(
-      `SELECT * FROM status_history WHERE expediente = ? ORDER BY recorded_at DESC LIMIT 1`,
+      `SELECT id FROM status_history
+       WHERE owner_key = ? AND expediente = ?
+       ORDER BY recorded_at DESC
+       LIMIT -1 OFFSET ?`,
     )
-    .get(expediente) as Record<string, unknown> | undefined;
-  if (!row) return null;
-  return {
-    id: String(row.id),
-    expediente: String(row.expediente),
-    status: row.status as StatusHistoryEntry["status"],
-    statusLabel: String(row.status_label),
-    lastMovementDate: row.last_movement_date
-      ? String(row.last_movement_date)
-      : null,
-    snapshot: JSON.parse(String(row.snapshot_json)) as TrademarkSnapshot,
-    recordedAt: String(row.recorded_at),
-  };
+    .all(ownerKey, entry.expediente, MAX_HISTORY_PER_MARK) as { id: string }[];
+  if (overflow.length) {
+    const del = db.prepare(`DELETE FROM status_history WHERE id = ?`);
+    for (const row of overflow) del.run(row.id);
+  }
 }
 
-export function listHistory(expediente: string, limit = 20): StatusHistoryEntry[] {
+export function listHistory(
+  ownerKey: string,
+  expediente: string,
+  limit = 20,
+): StatusHistoryEntry[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT * FROM status_history WHERE expediente = ? ORDER BY recorded_at DESC LIMIT ?`,
+      `SELECT * FROM status_history
+       WHERE owner_key = ? AND expediente = ?
+       ORDER BY recorded_at DESC LIMIT ?`,
     )
-    .all(expediente, limit) as Record<string, unknown>[];
+    .all(ownerKey, expediente, Math.min(limit, MAX_HISTORY_PER_MARK)) as Record<
+    string,
+    unknown
+  >[];
   return rows.map((row) => ({
     id: String(row.id),
     expediente: String(row.expediente),
@@ -207,7 +256,23 @@ export function listHistory(expediente: string, limit = 20): StatusHistoryEntry[
   }));
 }
 
+function pruneNotifications(ownerKey: string): void {
+  const db = getDb();
+  const overflow = db
+    .prepare(
+      `SELECT id FROM notifications
+       WHERE owner_key = ?
+       ORDER BY created_at DESC
+       LIMIT -1 OFFSET ?`,
+    )
+    .all(ownerKey, MAX_NOTIFICATIONS_PER_OWNER) as { id: string }[];
+  if (!overflow.length) return;
+  const del = db.prepare(`DELETE FROM notifications WHERE id = ?`);
+  for (const row of overflow) del.run(row.id);
+}
+
 export function addNotification(
+  ownerKey: string,
   notification: Omit<AppNotification, "read"> & { read?: boolean },
 ): AppNotification {
   const db = getDb();
@@ -216,10 +281,12 @@ export function addNotification(
     read: notification.read ?? false,
   };
   db.prepare(
-    `INSERT INTO notifications (id, expediente, kind, title, body, created_at, read)
-     VALUES (@id, @expediente, @kind, @title, @body, @created_at, @read)`,
+    `INSERT INTO notifications
+      (id, owner_key, expediente, kind, title, body, created_at, read)
+     VALUES (@id, @owner_key, @expediente, @kind, @title, @body, @created_at, @read)`,
   ).run({
     id: full.id,
+    owner_key: ownerKey,
     expediente: full.expediente,
     kind: full.kind,
     title: full.title,
@@ -227,27 +294,32 @@ export function addNotification(
     created_at: full.createdAt,
     read: full.read ? 1 : 0,
   });
+  pruneNotifications(ownerKey);
   return full;
 }
 
-export function listNotifications(options?: {
-  unreadOnly?: boolean;
-  limit?: number;
-}): AppNotification[] {
+export function listNotifications(
+  ownerKey: string,
+  options?: { unreadOnly?: boolean; limit?: number },
+): AppNotification[] {
   const db = getDb();
-  const limit = options?.limit ?? 50;
+  const limit = Math.min(options?.limit ?? 50, MAX_NOTIFICATIONS_PER_OWNER);
   const rows = (
     options?.unreadOnly
       ? db
           .prepare(
-            `SELECT * FROM notifications WHERE read = 0 ORDER BY created_at DESC LIMIT ?`,
+            `SELECT * FROM notifications
+             WHERE owner_key = ? AND read = 0
+             ORDER BY created_at DESC LIMIT ?`,
           )
-          .all(limit)
+          .all(ownerKey, limit)
       : db
           .prepare(
-            `SELECT * FROM notifications ORDER BY created_at DESC LIMIT ?`,
+            `SELECT * FROM notifications
+             WHERE owner_key = ?
+             ORDER BY created_at DESC LIMIT ?`,
           )
-          .all(limit)
+          .all(ownerKey, limit)
   ) as Record<string, unknown>[];
 
   return rows.map((row) => ({
@@ -261,30 +333,31 @@ export function listNotifications(options?: {
   }));
 }
 
-export function markNotificationRead(id: string): boolean {
+export function markNotificationRead(ownerKey: string, id: string): boolean {
   const db = getDb();
   const info = db
-    .prepare(`UPDATE notifications SET read = 1 WHERE id = ?`)
-    .run(id);
+    .prepare(
+      `UPDATE notifications SET read = 1 WHERE id = ? AND owner_key = ?`,
+    )
+    .run(id, ownerKey);
   return info.changes > 0;
 }
 
-export function markAllNotificationsRead(): number {
+export function markAllNotificationsRead(ownerKey: string): number {
   const db = getDb();
-  const info = db.prepare(`UPDATE notifications SET read = 1 WHERE read = 0`).run();
+  const info = db
+    .prepare(
+      `UPDATE notifications SET read = 1 WHERE owner_key = ? AND read = 0`,
+    )
+    .run(ownerKey);
   return info.changes;
 }
 
-export function countTracked(): number {
-  const db = getDb();
-  const row = db.prepare(`SELECT COUNT(*) AS c FROM tracked_marks`).get() as {
-    c: number;
-  };
-  return row.c;
-}
-
-export function listExpiringWithin(days: number): TrackedMark[] {
-  const marks = listTrackedMarks().filter((m) => m.current?.expiryDate);
+export function listExpiringWithin(
+  ownerKey: string,
+  days: number,
+): TrackedMark[] {
+  const marks = listTrackedMarks(ownerKey).filter((m) => m.current?.expiryDate);
   const now = Date.now();
   const horizon = now + days * 24 * 60 * 60 * 1000;
   return marks

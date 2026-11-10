@@ -3,6 +3,10 @@ import { sleep } from "@/lib/fetcher/backoff";
 import { diffSnapshots } from "@/lib/diff";
 import { notifyFromDiff, notifyPaseStub } from "@/lib/notifier";
 import {
+  MAX_MARKS_PER_REFRESH,
+  PORTAL_CALL_GAP_MS,
+} from "@/lib/limits";
+import {
   addHistoryEntry,
   getTrackedMark,
   listTrackedMarks,
@@ -15,8 +19,14 @@ function hid(): string {
 }
 
 export async function refreshExpediente(
+  ownerKey: string,
   expediente: string,
-  options?: { firstTrack?: boolean; clientLabel?: string; notes?: string },
+  options?: {
+    firstTrack?: boolean;
+    clientLabel?: string;
+    notes?: string;
+    enforceCap?: boolean;
+  },
 ): Promise<RefreshResult> {
   const normalized = expediente.replace(/\D/g, "");
   if (!/^\d{7}$/.test(normalized)) {
@@ -31,22 +41,35 @@ export async function refreshExpediente(
   }
 
   try {
-    const previous = getTrackedMark(normalized)?.current ?? null;
+    const previous = getTrackedMark(ownerKey, normalized)?.current ?? null;
     const snapshot = await fetchTrademarkSnapshot(normalized);
     const diff = diffSnapshots(previous, snapshot);
     const usedMockFallback =
       getFetchMode() === "auto" && snapshot.source === "mock";
 
-    upsertTrackedMark({
+    const upserted = upsertTrackedMark({
+      ownerKey,
       expediente: normalized,
       clientLabel: options?.clientLabel,
       notes: options?.notes,
       current: snapshot,
       lastRefreshedAt: snapshot.fetchedAt,
+      enforceCap: options?.enforceCap ?? options?.firstTrack,
     });
 
+    if ("error" in upserted) {
+      return {
+        expediente: normalized,
+        ok: false,
+        source: snapshot.source,
+        changed: false,
+        notificationsCreated: 0,
+        error: `Límite de ${upserted.max} expedientes por cartera alcanzado.`,
+      };
+    }
+
     if (diff.changed || options?.firstTrack) {
-      addHistoryEntry({
+      addHistoryEntry(ownerKey, {
         id: hid(),
         expediente: normalized,
         status: snapshot.status,
@@ -57,12 +80,11 @@ export async function refreshExpediente(
       });
     }
 
-    const notifications = notifyFromDiff(snapshot, diff, {
+    const notifications = notifyFromDiff(ownerKey, snapshot, diff, {
       firstTrack: options?.firstTrack,
       usedMockFallback: usedMockFallback && Boolean(options?.firstTrack),
     });
 
-    // Architecture stub: Trigger → … → Notifier (PASE later)
     void notifyPaseStub({
       expediente: normalized,
       message: `Refresh ${normalized} source=${snapshot.source}`,
@@ -88,13 +110,14 @@ export async function refreshExpediente(
   }
 }
 
-export async function refreshAllTracked(): Promise<RefreshResult[]> {
-  const marks = listTrackedMarks();
+export async function refreshAllTracked(
+  ownerKey: string,
+): Promise<RefreshResult[]> {
+  const marks = listTrackedMarks(ownerKey).slice(0, MAX_MARKS_PER_REFRESH);
   const results: RefreshResult[] = [];
   for (const mark of marks) {
-    results.push(await refreshExpediente(mark.expediente));
-    // Polite delay between portal calls
-    await sleep(400);
+    results.push(await refreshExpediente(ownerKey, mark.expediente));
+    await sleep(PORTAL_CALL_GAP_MS);
   }
   return results;
 }

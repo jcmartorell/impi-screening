@@ -1,47 +1,93 @@
-import { NextResponse } from "next/server";
+import { jsonPrivate, requireViewer } from "@/lib/auth";
+import { MAX_TRACKED_MARKS_PER_OWNER, assertRefreshAllowed } from "@/lib/limits";
 import { listTrackedMarks, upsertTrackedMark } from "@/lib/store";
 import { refreshExpediente } from "@/lib/refresh";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const marks = listTrackedMarks();
-  return NextResponse.json({ marks, count: marks.length });
+export async function GET(request: Request) {
+  const viewer = await requireViewer(request);
+  if (viewer instanceof Response) return viewer;
+
+  const marks = listTrackedMarks(viewer.ownerKey);
+  return jsonPrivate({
+    marks,
+    count: marks.length,
+    max: MAX_TRACKED_MARKS_PER_OWNER,
+    viewer: { name: viewer.name, simulated: viewer.simulated },
+  });
 }
 
 export async function POST(request: Request) {
+  const viewer = await requireViewer(request);
+  if (viewer instanceof Response) return viewer;
+
   let body: { expediente?: string; clientLabel?: string; notes?: string };
   try {
     body = (await request.json()) as typeof body;
   } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    return jsonPrivate({ error: "JSON inválido" }, { status: 400 });
   }
 
   const expediente = String(body.expediente ?? "").replace(/\D/g, "");
   if (!/^\d{7}$/.test(expediente)) {
-    return NextResponse.json(
+    return jsonPrivate(
       { error: "expediente debe ser de 7 dígitos" },
       { status: 400 },
     );
   }
 
-  // Ensure row exists before refresh so client label/notes stick
-  upsertTrackedMark({
-    expediente,
-    clientLabel: body.clientLabel?.trim() || undefined,
-    notes: body.notes?.trim() || undefined,
-  });
+  const limit = assertRefreshAllowed(viewer.ownerKey, "single");
+  if (!limit.ok) {
+    return jsonPrivate(
+      { error: limit.error, retryAfterSec: limit.retryAfterSec },
+      {
+        status: 429,
+        headers: { "Retry-After": String(limit.retryAfterSec) },
+      },
+    );
+  }
 
-  const result = await refreshExpediente(expediente, {
-    firstTrack: true,
+  const existing = listTrackedMarks(viewer.ownerKey).find(
+    (m) => m.expediente === expediente,
+  );
+  if (!existing) {
+    const placeholder = upsertTrackedMark({
+      ownerKey: viewer.ownerKey,
+      expediente,
+      clientLabel: body.clientLabel?.trim() || undefined,
+      notes: body.notes?.trim() || undefined,
+      enforceCap: true,
+    });
+    if ("error" in placeholder) {
+      return jsonPrivate(
+        {
+          error: `Límite de ${placeholder.max} expedientes por cartera alcanzado.`,
+          max: placeholder.max,
+        },
+        { status: 413 },
+      );
+    }
+  } else {
+    upsertTrackedMark({
+      ownerKey: viewer.ownerKey,
+      expediente,
+      clientLabel: body.clientLabel?.trim() || undefined,
+      notes: body.notes?.trim() || undefined,
+    });
+  }
+
+  const result = await refreshExpediente(viewer.ownerKey, expediente, {
+    firstTrack: !existing,
     clientLabel: body.clientLabel?.trim() || undefined,
     notes: body.notes?.trim() || undefined,
+    enforceCap: true,
   });
 
   if (!result.ok) {
-    return NextResponse.json(result, { status: 502 });
+    return jsonPrivate(result, { status: 502 });
   }
 
-  return NextResponse.json(result, { status: 201 });
+  return jsonPrivate(result, { status: 201 });
 }

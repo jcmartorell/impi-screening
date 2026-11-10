@@ -60,8 +60,14 @@ Trigger (UI / POST /api/refresh)
 
 Al primer arranque se cargan expedientes de muestra: `2451893`, `1987654`, `2234567`, `2567890`, `2109876`, `2345678`.
 
+## Auth y límites
+
+- Las rutas de cartera/notificaciones/refresh exigen identidad Cursor (`requireIdentity`). En local se simula un viewer (`cursor/identity.dev.ts`).
+- Cada cartera está aislada por `sub` + stage (preview vs production).
+- Tope de 50 expedientes por cartera; historial y notificaciones con poda; refresh con cooldown y ventana (429 + `Retry-After`).
+
 ## Límites conocidos
 
 - El portal público IMPI es frágil (timeouts, captchas, HTML inestable). En la práctica v1 opera casi siempre en modo mock/auto-fallback.
-- Sin autenticación de usuarios; pensado para uso de práctica en entorno controlado.
 - Persistencia en archivo SQLite local (no servicio de base de datos gestionado).
+- PASE / Slack / email / WhatsApp / MARCia siguen fuera de alcance.

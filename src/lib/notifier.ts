@@ -8,6 +8,7 @@ function nid(): string {
 }
 
 export function notifyFromDiff(
+  ownerKey: string,
   snapshot: TrademarkSnapshot,
   diff: SnapshotDiff,
   options?: { firstTrack?: boolean; usedMockFallback?: boolean },
@@ -16,7 +17,7 @@ export function notifyFromDiff(
 
   if (options?.firstTrack) {
     created.push(
-      addNotification({
+      addNotification(ownerKey, {
         id: nid(),
         expediente: snapshot.expediente,
         kind: "tracked",
@@ -29,7 +30,7 @@ export function notifyFromDiff(
 
   if (diff.statusChanged && diff.previousStatus) {
     created.push(
-      addNotification({
+      addNotification(ownerKey, {
         id: nid(),
         expediente: snapshot.expediente,
         kind: "status_change",
@@ -42,7 +43,7 @@ export function notifyFromDiff(
 
   for (const movement of diff.newMovements.slice(0, 5)) {
     created.push(
-      addNotification({
+      addNotification(ownerKey, {
         id: nid(),
         expediente: snapshot.expediente,
         kind: "new_movement",
@@ -58,7 +59,7 @@ export function notifyFromDiff(
       (Date.parse(snapshot.expiryDate) - Date.now()) / (24 * 60 * 60 * 1000);
     if (days >= 0 && days <= 120) {
       created.push(
-        addNotification({
+        addNotification(ownerKey, {
           id: nid(),
           expediente: snapshot.expediente,
           kind: "expiry_warning",
@@ -72,7 +73,7 @@ export function notifyFromDiff(
 
   if (options?.usedMockFallback) {
     created.push(
-      addNotification({
+      addNotification(ownerKey, {
         id: nid(),
         expediente: snapshot.expediente,
         kind: "fetch_fallback",
@@ -93,6 +94,7 @@ export async function notifyPaseStub(_payload: {
 }): Promise<{ ok: false; reason: string }> {
   return {
     ok: false,
-    reason: "PASE stub only — authenticated IMPI PASE notifications are out of scope for v1.",
+    reason:
+      "PASE stub only — authenticated IMPI PASE notifications are out of scope for v1.",
   };
 }

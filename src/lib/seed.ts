@@ -2,6 +2,9 @@ import type Database from "better-sqlite3";
 import { buildMockSnapshot } from "@/lib/fetcher/mock";
 import type { AppNotification, StatusHistoryEntry } from "@/lib/types";
 
+/** Matches local simulated viewer partition (sub::production). */
+export const DEV_OWNER_KEY = "user:dev::production";
+
 const SEED_MARKS: {
   expediente: string;
   clientLabel: string;
@@ -44,23 +47,25 @@ function id(prefix: string): string {
 }
 
 export function seedIfEmpty(db: Database.Database): void {
-  const row = db.prepare(`SELECT COUNT(*) AS c FROM tracked_marks`).get() as {
-    c: number;
-  };
+  const row = db
+    .prepare(`SELECT COUNT(*) AS c FROM tracked_marks WHERE owner_key = ?`)
+    .get(DEV_OWNER_KEY) as { c: number };
   if (row.c > 0) return;
 
   const insertMark = db.prepare(
-    `INSERT INTO tracked_marks (expediente, client_label, notes, tracked_at, last_refreshed_at, current_json)
-     VALUES (@expediente, @client_label, @notes, @tracked_at, @last_refreshed_at, @current_json)`,
+    `INSERT INTO tracked_marks
+      (owner_key, expediente, client_label, notes, tracked_at, last_refreshed_at, current_json)
+     VALUES (@owner_key, @expediente, @client_label, @notes, @tracked_at, @last_refreshed_at, @current_json)`,
   );
   const insertHistory = db.prepare(
     `INSERT INTO status_history
-      (id, expediente, status, status_label, last_movement_date, snapshot_json, recorded_at)
-     VALUES (@id, @expediente, @status, @status_label, @last_movement_date, @snapshot_json, @recorded_at)`,
+      (id, owner_key, expediente, status, status_label, last_movement_date, snapshot_json, recorded_at)
+     VALUES (@id, @owner_key, @expediente, @status, @status_label, @last_movement_date, @snapshot_json, @recorded_at)`,
   );
   const insertNotif = db.prepare(
-    `INSERT INTO notifications (id, expediente, kind, title, body, created_at, read)
-     VALUES (@id, @expediente, @kind, @title, @body, @created_at, @read)`,
+    `INSERT INTO notifications
+      (id, owner_key, expediente, kind, title, body, created_at, read)
+     VALUES (@id, @owner_key, @expediente, @kind, @title, @body, @created_at, @read)`,
   );
 
   const now = new Date();
@@ -70,6 +75,7 @@ export function seedIfEmpty(db: Database.Database): void {
     for (const mark of SEED_MARKS) {
       const snapshot = buildMockSnapshot(mark.expediente);
       insertMark.run({
+        owner_key: DEV_OWNER_KEY,
         expediente: mark.expediente,
         client_label: mark.clientLabel,
         notes: mark.notes,
@@ -89,6 +95,7 @@ export function seedIfEmpty(db: Database.Database): void {
       };
       insertHistory.run({
         id: history.id,
+        owner_key: DEV_OWNER_KEY,
         expediente: history.expediente,
         status: history.status,
         status_label: history.statusLabel,
@@ -140,6 +147,7 @@ export function seedIfEmpty(db: Database.Database): void {
     for (const n of sampleNotifications) {
       insertNotif.run({
         id: n.id,
+        owner_key: DEV_OWNER_KEY,
         expediente: n.expediente,
         kind: n.kind,
         title: n.title,
