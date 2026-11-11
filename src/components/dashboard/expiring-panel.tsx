@@ -17,13 +17,18 @@ function daysLeft(expiry: string): number {
   );
 }
 
+export type ExpiringMark = TrackedMark & { source?: "tracked" | "scan" };
+
 export function ExpiringPanel({
   marks,
   days = 30,
 }: {
-  marks: TrackedMark[];
+  marks: ExpiringMark[];
   days?: number;
 }) {
+  const scanCount = marks.filter((m) => m.source === "scan").length;
+  const trackedCount = marks.filter((m) => m.source !== "scan").length;
+
   return (
     <section
       id="vencimientos"
@@ -35,7 +40,10 @@ export function ExpiringPanel({
             Vencen ≤ {days} días
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Expedientes en seguimiento con vigencia dentro de {days} días.
+            Cartera en seguimiento
+            {trackedCount ? ` (${trackedCount})` : ""} + escaneo diario
+            TuGaceta
+            {scanCount ? ` (${scanCount})` : ""}.
           </p>
         </div>
         <p className="font-[family-name:var(--font-display)] text-2xl text-[color:var(--ink)]">
@@ -45,21 +53,26 @@ export function ExpiringPanel({
 
       {marks.length === 0 ? (
         <p className="rounded-lg border border-dashed border-[color:var(--ink)]/15 bg-white/40 px-4 py-6 text-sm text-muted-foreground">
-          Ningún expediente en seguimiento vence en los próximos {days} días.
+          Ningún expediente vence en los próximos {days} días. Configura el
+          escaneo diario abajo o sigue marcas con vigencia conocida.
         </p>
       ) : (
         <ul className="divide-y divide-[color:var(--ink)]/8">
           {marks.map((m) => {
             const expiry = m.current?.expiryDate ?? null;
             const left = expiry ? daysLeft(expiry) : null;
+            const fromScan = m.source === "scan";
             return (
               <li
-                key={m.expediente}
+                key={`${m.source ?? "tracked"}-${m.expediente}`}
                 className="flex flex-wrap items-baseline justify-between gap-2 py-3 first:pt-0 last:pb-0"
               >
                 <div className="min-w-0">
                   <p className="font-mono text-sm text-[color:var(--ink)]">
                     {m.expediente}
+                    <span className="ml-2 font-sans text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {fromScan ? "escaneo" : "cartera"}
+                    </span>
                   </p>
                   <p className="truncate text-sm text-muted-foreground">
                     {m.current?.markName || m.clientLabel || "Sin nombre"}

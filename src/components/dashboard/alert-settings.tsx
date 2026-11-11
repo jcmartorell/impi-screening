@@ -68,8 +68,8 @@ export function AlertSettings({
         <p className="text-xs text-muted-foreground">
           Predeterminado: <code className="font-mono">ap.vidaln@gmail.com</code>
           {usingDefault ? " (activo hasta que guardes otro)" : ""}. Editable;
-          vacío = no enviar. Solo por cambios en seguimiento (no búsqueda).
-          Transporte:{" "}
+          vacío = no enviar. Cubre cambios en seguimiento y digest del escaneo
+          diario de vencimientos. Transporte:{" "}
           <code className="font-mono">
             {emailTransport === "log"
               ? "log (sin RESEND_API_KEY / SMTP)"

@@ -255,3 +255,56 @@ export async function emailModificationAlerts(
 
   return sendAlertEmail({ to, subject, text, html });
 }
+
+export type DailyExpiryEmailHit = {
+  expediente: string;
+  markName: string;
+  classNice?: string;
+  expiryDate: string;
+};
+
+/** Digest for newly found near-expiry marks from the daily TuGaceta scan. */
+export async function emailDailyExpiryDigest(
+  destination: string | null | undefined,
+  hits: DailyExpiryEmailHit[],
+  options?: { daysWindow?: number },
+): Promise<EmailSendResult | null> {
+  if (!hits.length) return null;
+
+  const to = (destination ?? "").trim();
+  if (!to) {
+    console.info(
+      "[impi-email] skip daily expiry digest — no alert email",
+      hits.map((h) => h.expediente),
+    );
+    return { ok: false, mode: "log", skipped: "no_destination" };
+  }
+
+  const days = options?.daysWindow ?? 30;
+  const subject =
+    hits.length === 1
+      ? `IMPI: vence ≤ ${days}d — ${hits[0].markName || hits[0].expediente}`
+      : `IMPI: ${hits.length} marcas vencen ≤ ${days} días (escaneo diario)`;
+
+  const text = hits
+    .map(
+      (h) =>
+        `${h.markName || "Sin nombre"}\nExpediente: ${h.expediente}\nClase: ${h.classNice || "—"}\nVigencia: ${h.expiryDate}`,
+    )
+    .join("\n\n---\n\n");
+
+  const html = `<div style="font-family:system-ui,sans-serif;line-height:1.45">
+  <p style="margin:0 0 12px">Nuevos vencimientos ≤ ${days} días detectados por el escaneo diario TuGaceta:</p>
+  ${hits
+    .map(
+      (h) => `<div style="margin:0 0 16px;padding:12px;border:1px solid #ddd;border-radius:8px">
+      <strong>${escapeHtml(h.markName || "Sin nombre")}</strong>
+      <p style="margin:6px 0;font-size:13px">Expediente ${escapeHtml(h.expediente)} · Clase ${escapeHtml(h.classNice || "—")}</p>
+      <p style="margin:0;font-size:12px;color:#555">Vigencia ${escapeHtml(h.expiryDate)}</p>
+    </div>`,
+    )
+    .join("")}
+</div>`;
+
+  return sendAlertEmail({ to, subject, text, html });
+}

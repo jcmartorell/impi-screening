@@ -51,6 +51,8 @@ function mockSearch(filters: SearchFilters): SearchResponse {
         Denominación: snap.markName,
         Titular: snap.owner,
         Clase: snap.classNice,
+        Vigencia: snap.expiryDate ?? "",
+        "Fecha de Concesión": snap.grantDate ?? "",
       },
       source: "mock",
     });

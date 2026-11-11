@@ -94,15 +94,18 @@ En modo `live`/`auto`, fallos del portal se muestran (502 + inbox) — **nunca**
 | `GET` | `/api/marks/expiring?days=90` | Marcas que vencen en N días |
 | `GET` | `/api/notifications` | Inbox |
 | `POST` | `/api/refresh` | Refresca cartera o `{ "expediente" }` |
-| `GET/PATCH` | `/api/settings` | `{ alertEmail }` destino de alertas (vacío = off) |
+| `GET/PATCH` | `/api/settings` | `{ alertEmail }` y/o `{ dailyScan }` filtros de escaneo |
+| `GET/POST` | `/api/daily-scan` | Estado / ejecutar ahora el escaneo de vencimientos |
 | `GET/POST` | `/api/cron/refresh` | Cron Vercel: refresca carteras (Bearer `CRON_SECRET`) |
+| `GET/POST` | `/api/cron/daily-scan` | Cron diario: búsqueda TuGaceta → ≤N días |
 
 ### Alertas por correo
 
 1. En **Seguimiento / monitoreo → Ajustes de alertas**, el correo predeterminado es `ap.vidaln@gmail.com` (editable; vacío = no envía).
 2. Configura en Vercel `RESEND_API_KEY` (preferido) o `SMTP_*`. Sin clave, el servidor solo registra el email en logs.
-3. `vercel.json` programa cron cada 6 h → `/api/cron/refresh` (solo lista de seguimiento; no busca).
-4. Lista **Vencen ≤ 30 días** bajo la cartera de seguimiento.
+3. `vercel.json` programa cron cada 6 h → `/api/cron/refresh` (cartera) y diario 14:00 UTC → `/api/cron/daily-scan`.
+4. Lista **Vencen ≤ 30 días** = cartera + resultados del escaneo diario (no solo seguimiento).
+5. **Escaneo diario**: sector / clase / keywords / fechas de publicación; opcional `IMPI_DAILY_SCAN_CONFIG` JSON en Vercel para cold-start del cron.
 
 ## Auth
 
