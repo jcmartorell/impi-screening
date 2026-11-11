@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { rememberExpedienteLocally } from "@/components/dashboard/portfolio-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -172,9 +173,11 @@ export function SearchPanel({ liveMode }: { liveMode: boolean }) {
       for (const exp of expedientes) {
         const res = await fetch("/api/marks", {
           method: "POST",
+          credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ expediente: exp }),
         });
+        rememberExpedienteLocally(exp);
         if (res.ok) ok.push(exp);
         else {
           const data = (await res.json()) as { error?: string };

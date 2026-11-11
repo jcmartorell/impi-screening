@@ -1,16 +1,27 @@
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { AlertSettings } from "@/components/dashboard/alert-settings";
+import { DailyScanSettings } from "@/components/dashboard/daily-scan-settings";
 import { ExpiringPanel } from "@/components/dashboard/expiring-panel";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
+import { PortfolioSync } from "@/components/dashboard/portfolio-sync";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
 import { SearchPanel } from "@/components/dashboard/search-panel";
 import { TrackForm } from "@/components/dashboard/track-form";
 import { resolveViewer } from "@/lib/auth";
+import {
+  DAILY_SCAN_COOKIE,
+  hydrateDailyScanFromCookie,
+  parseDailyScanCookieValue,
+} from "@/lib/daily-scan-cookie";
 import { getFetchMode } from "@/lib/fetcher/marcanet";
 import {
+  hydratePortfolioFromCookieValue,
+  PORTFOLIO_COOKIE,
+} from "@/lib/portfolio";
+import {
   getOwnerSettings,
-  listExpiringWithin,
+  listExpiringCombined,
   listNotifications,
   listTrackedMarks,
 } from "@/lib/store";
@@ -37,11 +48,23 @@ export default async function HomePage() {
     );
   }
 
+  // Cookie is the durable source of truth on Vercel (/tmp SQLite is ephemeral).
+  const jar = await cookies();
+  hydratePortfolioFromCookieValue(
+    viewer.ownerKey,
+    jar.get(PORTFOLIO_COOKIE)?.value,
+  );
+  hydrateDailyScanFromCookie(
+    viewer.ownerKey,
+    parseDailyScanCookieValue(jar.get(DAILY_SCAN_COOKIE)?.value),
+  );
+
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
-  const expiringSoon = listExpiringWithin(viewer.ownerKey, 30);
-  const expiring = listExpiringWithin(viewer.ownerKey, 120);
   const settings = getOwnerSettings(viewer.ownerKey);
+  const expiryDays = settings.dailyScan.daysWindow || 30;
+  const expiringSoon = listExpiringCombined(viewer.ownerKey, expiryDays);
+  const expiring = listExpiringCombined(viewer.ownerKey, 120);
   const mode = getFetchMode();
   const liveMode = mode !== "mock";
   const unread = notifications.filter((n) => !n.read).length;
@@ -56,6 +79,7 @@ export default async function HomePage() {
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+      <PortfolioSync serverCount={marks.length} serverMarks={marks} />
       {viewer.demoMode && !liveMode ? (
         <div
           role="status"
@@ -123,7 +147,7 @@ export default async function HomePage() {
         </div>
         <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 px-4 py-3">
           <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-            Vencen ≤ 30 días
+            Vencen ≤ {expiryDays} días
           </p>
           <p className="mt-1 font-[family-name:var(--font-display)] text-3xl text-[color:var(--ink)]">
             {expiringSoon.length}
@@ -178,7 +202,7 @@ export default async function HomePage() {
               </div>
               <MarksTable marks={marks} />
             </div>
-            <ExpiringPanel marks={expiringSoon} days={30} />
+            <ExpiringPanel marks={expiringSoon} days={expiryDays} />
             <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
               <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
                 Seguir por expediente
@@ -191,11 +215,25 @@ export default async function HomePage() {
             </div>
             <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
               <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
+                Escaneo diario de vencimientos
+              </h2>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Filtros TuGaceta (sector, clase, keyword, fechas) que el cron
+                corre cada día. Los ≤{expiryDays}d alimentan la lista de arriba
+                (no solo la cartera).
+              </p>
+              <DailyScanSettings
+                initial={settings.dailyScan}
+                lastRunAt={settings.dailyScanLastRunAt}
+              />
+            </div>
+            <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
+              <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
                 Ajustes de alertas
               </h2>
               <p className="mb-3 text-xs text-muted-foreground">
                 Destino de correo cuando hay modificación en un expediente
-                monitoreado.
+                monitoreado o nuevos vencimientos del escaneo diario.
               </p>
               <AlertSettings
                 initialEmail={settings.alertEmail}

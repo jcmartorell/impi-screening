@@ -51,12 +51,14 @@ function mockSearch(filters: SearchFilters): SearchResponse {
         Denominación: snap.markName,
         Titular: snap.owner,
         Clase: snap.classNice,
+        Vigencia: snap.expiryDate ?? "",
+        "Fecha de Concesión": snap.grantDate ?? "",
       },
       source: "mock",
     });
   }
 
-  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 12_000);
   return {
     ok: true,
     mode: "mock",
