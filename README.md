@@ -11,7 +11,7 @@ Este Project reemplaza el stub vacío de [impi-screening](https://github.com/jcm
 - Refresh manual (y listo para schedule) que fetch → parse/diff → notifica
 - Fetcher público Marcanet/SIGA con delays y backoff; **modo live por defecto en Vercel/producción**
 - Catálogo mock **solo** si `IMPI_FETCH_MODE=mock` (demos locales)
-- SQLite local (`data/impi.sqlite`) con semillas de muestra para la UI
+- SQLite local (`data/impi.sqlite`); semillas de muestra **solo** con `IMPI_FETCH_MODE=mock`
 - Stub de capa PASE (sin login autenticado)
 
 Fuera de alcance v1: PASE real, MARCia, WhatsApp/Twilio, Slack/email.
@@ -48,7 +48,7 @@ En Vercel, `vercel.json` fija `IMPI_FETCH_MODE=live`.
 
 ## Probar un expediente real (producción)
 
-1. Abre [https://impi-monitor.vercel.app](https://impi-monitor.vercel.app) (modo demo si no hay identidad Cursor).
+1. Abre [https://impi-monitor.vercel.app](https://impi-monitor.vercel.app). Sin `CURSOR_APP_ID` verás auth UI simulada (cartera vacía); eso **no** es catálogo mock.
 2. En **Alta de expediente**, ingresa un expediente mexicano de **7 dígitos** real y pulsa dar de alta.
 3. El servidor hace `POST /api/marks` → fetcher Marcanet/SIGA (`IMPI_FETCH_MODE=live`).
 4. Si el portal responde y el HTML/JSON se parsea → verás `source: live` en la cartera.
@@ -79,12 +79,13 @@ Trigger (UI / POST /api/refresh|/api/marks)
 
 ## Semillas
 
-Al primer arranque (UI demo) se cargan expedientes de muestra: `2451893`, `1987654`, `2234567`, `2567890`, `2109876`, `2345678`. Esas semillas alimentan la vista; **un alta/refresh en modo live no las sustituye por mock** si el portal falla.
+Solo con `IMPI_FETCH_MODE=mock`: al primer arranque se cargan expedientes de muestra (`2451893`, `1987654`, `2234567`, `2567890`, `2109876`, `2345678`) y avisos de catálogo mock. En `live`/`auto` (incl. Vercel) la cartera del visitante anónimo arranca **vacía** — no hay seed ni “modo muestra activo”.
 
 ## Auth y límites
 
 - Las rutas de cartera/notificaciones/refresh exigen identidad Cursor (`requireIdentity`). En local se simula un viewer (`cursor/identity.dev.ts`).
-- En Vercel sin `CURSOR_APP_ID`, hay fallback demo para ver la UI (no confundir con datos live).
+- En Vercel sin `CURSOR_APP_ID`, hay fallback de **auth UI simulada** para ver la pantalla. Eso es independiente de `IMPI_FETCH_MODE`: con `live` las consultas van al portal (o fallan visibles), sin cartera seed ni catálogo mock.
+- Con `CURSOR_APP_ID` se exige identidad verificada (sin bypass).
 - Cada cartera está aislada por `sub` + stage (preview vs production).
 - Tope de 50 expedientes por cartera; historial y notificaciones con poda; refresh con cooldown y ventana (429 + `Retry-After`).
 

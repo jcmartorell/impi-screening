@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { getFetchMode } from "@/lib/fetcher/marcanet";
 import { buildMockSnapshot } from "@/lib/fetcher/mock";
 import type { AppNotification, StatusHistoryEntry } from "@/lib/types";
 
@@ -42,11 +43,62 @@ const SEED_MARKS: {
   },
 ];
 
+const SEED_EXPEDIENTES = new Set(SEED_MARKS.map((m) => m.expediente));
+
 function id(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Remove legacy mock-seed portfolio left by older deploys on warm /tmp when
+ * fetch mode is not mock. Leaves mixed/user-added carteras alone, but always
+ * drops inbox rows that claim the mock catalog is active.
+ */
+function clearLegacySeedWhenLive(db: Database.Database): void {
+  db.prepare(
+    `DELETE FROM notifications
+     WHERE owner_key = ?
+       AND kind = 'fetch_fallback'
+       AND (
+         title = 'Modo muestra activo'
+         OR title = 'Consulta en modo muestra'
+         OR body LIKE '%catálogo mock%'
+         OR body LIKE '%catalogo mock%'
+       )`,
+  ).run(DEV_OWNER_KEY);
+
+  const marks = db
+    .prepare(`SELECT expediente FROM tracked_marks WHERE owner_key = ?`)
+    .all(DEV_OWNER_KEY) as { expediente: string }[];
+  if (marks.length === 0) return;
+
+  const onlySeed = marks.every((m) => SEED_EXPEDIENTES.has(m.expediente));
+  if (!onlySeed) return;
+
+  const wipe = db.transaction(() => {
+    db.prepare(`DELETE FROM tracked_marks WHERE owner_key = ?`).run(
+      DEV_OWNER_KEY,
+    );
+    db.prepare(`DELETE FROM status_history WHERE owner_key = ?`).run(
+      DEV_OWNER_KEY,
+    );
+    db.prepare(`DELETE FROM notifications WHERE owner_key = ?`).run(
+      DEV_OWNER_KEY,
+    );
+  });
+  wipe();
+}
+
+/**
+ * Seed mock cartera only when `IMPI_FETCH_MODE=mock`.
+ * Live/auto: empty cartera for the demo viewer until a real expediente is added.
+ */
 export function seedIfEmpty(db: Database.Database): void {
+  if (getFetchMode() !== "mock") {
+    clearLegacySeedWhenLive(db);
+    return;
+  }
+
   const row = db
     .prepare(`SELECT COUNT(*) AS c FROM tracked_marks WHERE owner_key = ?`)
     .get(DEV_OWNER_KEY) as { c: number };

@@ -33,24 +33,36 @@ export default async function HomePage() {
     );
   }
 
+  const mode = getFetchMode();
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
   const expiring = listExpiringWithin(viewer.ownerKey, 120);
-  const mode = getFetchMode();
   const unread = notifications.filter((n) => !n.read).length;
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-      {viewer.demoMode ? (
+      {viewer.demoMode && mode === "mock" ? (
         <div
           role="status"
           className="animate-rise rounded-lg border border-[color:var(--brass)]/40 bg-[color:var(--brass)]/15 px-4 py-3 text-sm text-[color:var(--ink)]"
         >
-          <strong className="font-semibold">Modo demo.</strong> Esta vista usa
-          datos de ejemplo (cartera seed). No es un inicio de sesión real con
-          Cursor; en la app publicada con{" "}
-          <code className="font-mono text-xs">CURSOR_APP_ID</code> se exige
-          identidad verificada.
+          <strong className="font-semibold">Modo muestra (mock).</strong> Auth
+          UI simulada y catálogo mock activos (
+          <code className="font-mono text-xs">IMPI_FETCH_MODE=mock</code>). No
+          es un inicio de sesión real con Cursor.
+        </div>
+      ) : null}
+      {viewer.demoMode && mode !== "mock" ? (
+        <div
+          role="status"
+          className="animate-rise rounded-lg border border-[color:var(--ink)]/15 bg-white/60 px-4 py-3 text-sm text-[color:var(--ink)]"
+        >
+          <strong className="font-semibold">Solo auth UI simulada.</strong>{" "}
+          Sin identidad Cursor verificada en este host. Las consultas van al
+          portal público Marcanet/SIGA (
+          <code className="font-mono text-xs">fetch mode: {mode}</code>
+          ) — no hay cartera seed ni catálogo mock. Da de alta un expediente
+          real para comenzar.
         </div>
       ) : null}
 
@@ -70,7 +82,9 @@ export default async function HomePage() {
           <p className="mt-2 text-xs text-muted-foreground">
             Sesión: {viewer.name || "usuario"}
             {viewer.demoMode
-              ? " (modo demo)"
+              ? mode === "mock"
+                ? " (modo muestra)"
+                : " (auth UI simulada)"
               : viewer.simulated
                 ? " (simulada en local)"
                 : ""}

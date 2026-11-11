@@ -1,5 +1,6 @@
 import { getIdentity, requireIdentity } from "../../cursor/identity";
 import { DEV_VIEWER } from "../../cursor/identity.dev";
+import { getFetchMode } from "@/lib/fetcher/marcanet";
 import { DEV_OWNER_KEY } from "@/lib/seed";
 
 export type AppViewer = {
@@ -9,7 +10,10 @@ export type AppViewer = {
   name: string;
   email: string;
   simulated: boolean;
-  /** True when anonymous Vercel/demo host fell back without Cursor sign-in. */
+  /**
+   * True when anonymous Vercel/demo host fell back without Cursor sign-in.
+   * This is UI auth simulation only — independent of IMPI_FETCH_MODE.
+   */
   demoMode: boolean;
   stage: "production" | "preview";
 };
@@ -25,13 +29,19 @@ function cursorAppIdSet(): boolean {
   return typeof id === "string" && id.trim() !== "";
 }
 
-/** Demo viewer aligned with seed partition `user:dev::production`. */
+/**
+ * Anonymous fallback viewer (no CURSOR_APP_ID).
+ * Name reflects auth simulation — not mock marca data (that is IMPI_FETCH_MODE).
+ */
 function demoViewer(): AppViewer {
   const [sub] = DEV_OWNER_KEY.split("::");
+  const mockData = getFetchMode() === "mock";
   return {
     sub,
     ownerKey: DEV_OWNER_KEY,
-    name: DEV_VIEWER?.name ?? "Demo Viewer",
+    name: mockData
+      ? (DEV_VIEWER?.name ?? "Demo Viewer")
+      : "Visitante",
     email: DEV_VIEWER?.email ?? "demo@example.com",
     simulated: true,
     demoMode: true,
@@ -42,8 +52,9 @@ function demoViewer(): AppViewer {
 /**
  * Resolve a portfolio viewer.
  * - Cursor-hosted (`CURSOR_APP_ID` set): verified identity only.
- * - Anonymous/demo hosts (no `CURSOR_APP_ID`): fall back to seed demo viewer
+ * - Anonymous/demo hosts (no `CURSOR_APP_ID`): fall back to demo viewer
  *   when the identity header is missing/unverified so Vercel previews work.
+ *   Identity fallback ≠ mock marca catalog (see IMPI_FETCH_MODE).
  */
 export async function resolveViewer(
   request: Parameters<typeof getIdentity>[0],
