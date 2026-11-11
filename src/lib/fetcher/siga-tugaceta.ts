@@ -481,7 +481,33 @@ export async function searchFichas(
   });
 
   const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
-  return { hits: hits.slice(0, limit), rawCount: rows.length };
+  hits = hits.slice(0, limit);
+
+  // Listado GetFichas often omits Denominación/Clase; enrich a few top hits
+  // sequentially (shared CSRF jar is not safe for parallel POSTs).
+  const toEnrich = hits
+    .filter((h) => !h.markName || !h.classNice || h.classNice === "—")
+    .slice(0, 6);
+  for (const h of toEnrich) {
+    try {
+      const detail = await fetchFichaInfo(h.fichaId, {
+        jar,
+        captchaToken: captcha,
+      });
+      if (!detail) continue;
+      h.markName = detail.markName ?? h.markName;
+      h.owner = detail.owner ?? h.owner;
+      h.classNice = detail.classNice ?? h.classNice;
+      h.registro = detail.registro ?? h.registro;
+      h.grantDate = detail.grantDate ?? h.grantDate;
+      h.statusLabel = detail.statusLabel ?? h.statusLabel;
+      h.rawDatos = { ...h.rawDatos, ...detail.rawDatos };
+    } catch {
+      /* keep list row */
+    }
+  }
+
+  return { hits, rawCount: rows.length };
 }
 
 export async function fetchFichaInfo(
