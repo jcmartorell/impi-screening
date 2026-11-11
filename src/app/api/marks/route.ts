@@ -1,4 +1,5 @@
 import { jsonPrivate, requireViewer } from "@/lib/auth";
+import { getFetchMode } from "@/lib/fetcher/marcanet";
 import { MAX_TRACKED_MARKS_PER_OWNER, assertRefreshAllowed } from "@/lib/limits";
 import { listTrackedMarks, upsertTrackedMark } from "@/lib/store";
 import { refreshExpediente } from "@/lib/refresh";
@@ -78,6 +79,7 @@ export async function POST(request: Request) {
     });
   }
 
+  const mode = getFetchMode();
   const result = await refreshExpediente(viewer.ownerKey, expediente, {
     firstTrack: !existing,
     clientLabel: body.clientLabel?.trim() || undefined,
@@ -86,8 +88,8 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) {
-    return jsonPrivate(result, { status: 502 });
+    return jsonPrivate({ ...result, mode }, { status: 502 });
   }
 
-  return jsonPrivate(result, { status: 201 });
+  return jsonPrivate({ ...result, mode }, { status: 201 });
 }

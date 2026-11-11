@@ -87,6 +87,22 @@ export function notifyFromDiff(
   return created;
 }
 
+/** Visible notice when live/auto portal lookup fails (no silent mock). */
+export function notifyFetchFailure(
+  ownerKey: string,
+  expediente: string,
+  reason: string,
+): AppNotification {
+  return addNotification(ownerKey, {
+    id: nid(),
+    expediente,
+    kind: "fetch_fallback",
+    title: "Portal Marcanet/SIGA no disponible",
+    body: `No se obtuvo dato live para ${expediente}. ${reason} No se usó catálogo mock.`,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 /** Stub: PASE authenticated login/notifications (credentials later). */
 export async function notifyPaseStub(_payload: {
   expediente: string;

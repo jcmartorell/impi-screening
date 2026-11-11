@@ -2,7 +2,10 @@ import { jsonPrivate, requireViewer } from "@/lib/auth";
 import { assertRefreshAllowed } from "@/lib/limits";
 import { getTrackedMark, listHistory } from "@/lib/store";
 import { refreshExpediente } from "@/lib/refresh";
-import { buildMockSnapshot } from "@/lib/fetcher/mock";
+import {
+  fetchTrademarkSnapshot,
+  getFetchMode,
+} from "@/lib/fetcher/marcanet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +25,7 @@ export async function GET(request: Request, context: Ctx) {
     );
   }
 
+  const mode = getFetchMode();
   const { searchParams } = new URL(request.url);
   const refresh = searchParams.get("refresh") === "1";
 
@@ -29,7 +33,7 @@ export async function GET(request: Request, context: Ctx) {
     const limit = assertRefreshAllowed(viewer.ownerKey, "single");
     if (!limit.ok) {
       return jsonPrivate(
-        { error: limit.error, retryAfterSec: limit.retryAfterSec },
+        { error: limit.error, retryAfterSec: limit.retryAfterSec, mode },
         {
           status: 429,
           headers: { "Retry-After": String(limit.retryAfterSec) },
@@ -38,7 +42,7 @@ export async function GET(request: Request, context: Ctx) {
     }
     const result = await refreshExpediente(viewer.ownerKey, expediente);
     if (!result.ok) {
-      return jsonPrivate(result, { status: 502 });
+      return jsonPrivate({ ...result, mode }, { status: 502 });
     }
   }
 
@@ -48,22 +52,36 @@ export async function GET(request: Request, context: Ctx) {
       tracked: true,
       mark: tracked,
       history: listHistory(viewer.ownerKey, expediente, 10),
+      mode,
     });
   }
 
-  // Untracked lookup: public snapshot only; never persist unless already tracked/refreshed above
-  const snapshot = buildMockSnapshot(expediente);
-
-  return jsonPrivate({
-    tracked: false,
-    mark: {
-      expediente,
-      clientLabel: "",
-      notes: "",
-      trackedAt: null,
-      lastRefreshedAt: snapshot.fetchedAt,
-      current: snapshot,
-    },
-    history: [],
-  });
+  // Untracked lookup: respect fetch mode (live/auto hit Marcanet; mock only if explicit).
+  try {
+    const snapshot = await fetchTrademarkSnapshot(expediente);
+    return jsonPrivate({
+      tracked: false,
+      mark: {
+        expediente,
+        clientLabel: "",
+        notes: "",
+        trackedAt: null,
+        lastRefreshedAt: snapshot.fetchedAt,
+        current: snapshot,
+      },
+      history: [],
+      mode,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonPrivate(
+      {
+        tracked: false,
+        error: message,
+        mode,
+        source: mode === "mock" ? "mock" : "live",
+      },
+      { status: 502 },
+    );
+  }
 }

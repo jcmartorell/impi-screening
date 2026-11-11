@@ -21,15 +21,21 @@ export function RefreshButton() {
       const data = (await res.json()) as {
         count?: number;
         changed?: number;
+        failed?: number;
         mode?: string;
         error?: string;
+        results?: { ok?: boolean; error?: string }[];
       };
       if (!res.ok) {
         setMessage(data.error ?? "Error al refrescar");
+        router.refresh();
         return;
       }
+      const failed = data.failed ?? 0;
       setMessage(
-        `Actualizados ${data.count ?? 0} · cambios ${data.changed ?? 0} · modo ${data.mode ?? "auto"}`,
+        failed > 0
+          ? `Actualizados ${data.count ?? 0} · fallos live ${failed} · modo ${data.mode ?? "?"} (ver inbox)`
+          : `Actualizados ${data.count ?? 0} · cambios ${data.changed ?? 0} · modo ${data.mode ?? "?"}`,
       );
       router.refresh();
     });

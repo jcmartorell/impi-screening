@@ -135,9 +135,10 @@ export default async function HomePage() {
       </div>
 
       <footer className="mt-auto border-t border-[color:var(--ink)]/10 pt-6 text-xs text-muted-foreground">
-        Capas: trigger/refresh → fetcher Marcanet/SIGA (mock fallback) → parser/diff →
-        notifier in-app. PASE autenticado, MARCia y WhatsApp quedan fuera de v1.
-        Cartera aislada por identidad Cursor; límites de alta y refresh activos.
+        Capas: trigger/refresh → fetcher Marcanet/SIGA (live por defecto en
+        producción; mock solo con IMPI_FETCH_MODE=mock) → parser/diff → notifier
+        in-app. Fallos del portal se muestran en el inbox (sin catálogo falso).
+        PASE autenticado, MARCia y WhatsApp quedan fuera de v1.
       </footer>
     </main>
   );

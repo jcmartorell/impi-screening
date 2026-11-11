@@ -14,10 +14,25 @@ const CANDIDATE_URLS = (expediente: string) => [
 
 export type FetchMode = "auto" | "live" | "mock";
 
+function isProductionRuntime(): boolean {
+  return (
+    process.env.VERCEL === "1" ||
+    process.env.VERCEL === "true" ||
+    process.env.NODE_ENV === "production"
+  );
+}
+
+/**
+ * Resolve fetch mode.
+ * - Explicit `IMPI_FETCH_MODE` always wins.
+ * - On Vercel / production, default to `live` (prefer real portal; fail visibly).
+ * - Locally, default to `auto` (try live, surface failure instead of silent mock).
+ * - Mock catalog only when `IMPI_FETCH_MODE=mock` (local demos).
+ */
 export function getFetchMode(): FetchMode {
-  const raw = (process.env.IMPI_FETCH_MODE ?? "auto").toLowerCase();
+  const raw = (process.env.IMPI_FETCH_MODE ?? "").trim().toLowerCase();
   if (raw === "live" || raw === "mock" || raw === "auto") return raw;
-  return "auto";
+  return isProductionRuntime() ? "live" : "auto";
 }
 
 function looksBlocked(body: string, status: number): boolean {
@@ -94,18 +109,22 @@ export async function fetchTrademarkSnapshot(
 ): Promise<TrademarkSnapshot> {
   const mode = getFetchMode();
 
+  // Mock catalog only when explicitly requested (local demos).
   if (mode === "mock") {
     return buildMockSnapshot(expediente);
   }
 
-  if (mode === "live") {
-    return tryLiveFetch(expediente);
-  }
-
+  // `live` and `auto`: attempt the public portal. Never silently substitute
+  // catalog mock for known seed expedientes — prefer a visible failure.
   try {
     return await tryLiveFetch(expediente);
-  } catch {
-    // Offline / captcha / rate-limit: keep the product demoable.
-    return buildMockSnapshot(expediente);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    const prefix =
+      mode === "live"
+        ? "Consulta live fallida"
+        : "Consulta al portal fallida (modo auto; sin fallback mock)";
+    throw new Error(`${prefix}: ${message}`);
   }
 }

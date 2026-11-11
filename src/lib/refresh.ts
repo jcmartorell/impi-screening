@@ -1,7 +1,11 @@
 import { fetchTrademarkSnapshot, getFetchMode } from "@/lib/fetcher/marcanet";
 import { sleep } from "@/lib/fetcher/backoff";
 import { diffSnapshots } from "@/lib/diff";
-import { notifyFromDiff, notifyPaseStub } from "@/lib/notifier";
+import {
+  notifyFetchFailure,
+  notifyFromDiff,
+  notifyPaseStub,
+} from "@/lib/notifier";
 import {
   MAX_MARKS_PER_REFRESH,
   PORTAL_CALL_GAP_MS,
@@ -33,19 +37,19 @@ export async function refreshExpediente(
     return {
       expediente,
       ok: false,
-      source: "mock",
+      source: "live",
       changed: false,
       notificationsCreated: 0,
       error: "El expediente debe ser un número de 7 dígitos.",
     };
   }
 
+  const mode = getFetchMode();
+
   try {
     const previous = getTrackedMark(ownerKey, normalized)?.current ?? null;
     const snapshot = await fetchTrademarkSnapshot(normalized);
     const diff = diffSnapshots(previous, snapshot);
-    const usedMockFallback =
-      getFetchMode() === "auto" && snapshot.source === "mock";
 
     const upserted = upsertTrackedMark({
       ownerKey,
@@ -82,12 +86,12 @@ export async function refreshExpediente(
 
     const notifications = notifyFromDiff(ownerKey, snapshot, diff, {
       firstTrack: options?.firstTrack,
-      usedMockFallback: usedMockFallback && Boolean(options?.firstTrack),
+      usedMockFallback: false,
     });
 
     void notifyPaseStub({
       expediente: normalized,
-      message: `Refresh ${normalized} source=${snapshot.source}`,
+      message: `Refresh ${normalized} source=${snapshot.source} mode=${mode}`,
     });
 
     return {
@@ -99,13 +103,20 @@ export async function refreshExpediente(
       snapshot,
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Live/auto: surface failure; never invent mock catalog data.
+    const notification =
+      mode !== "mock"
+        ? notifyFetchFailure(ownerKey, normalized, message)
+        : null;
+
     return {
       expediente: normalized,
       ok: false,
-      source: "mock",
+      source: mode === "mock" ? "mock" : "live",
       changed: false,
-      notificationsCreated: 0,
-      error: error instanceof Error ? error.message : String(error),
+      notificationsCreated: notification ? 1 : 0,
+      error: message,
     };
   }
 }

@@ -31,9 +31,17 @@ export function TrackForm() {
           clientLabel: clientLabel.trim() || undefined,
         }),
       });
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as {
+        error?: string;
+        source?: string;
+        ok?: boolean;
+      };
       if (!res.ok) {
-        setError(data.error ?? "No se pudo registrar el expediente.");
+        setError(
+          data.error ??
+            "No se pudo consultar el portal Marcanet/SIGA (sin fallback mock).",
+        );
+        router.refresh();
         return;
       }
       setExpediente("");
