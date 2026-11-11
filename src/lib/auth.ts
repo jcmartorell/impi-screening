@@ -78,7 +78,8 @@ export async function resolveViewer(
     return null;
   }
 
-  // Anonymous Vercel / local-without-header: show seed cartera in demo mode.
+  // Anonymous Vercel / local-without-header: UI simulation without Cursor.
+  // In live/auto fetch mode the cartera is empty (no mock seed framing).
   // Covers missing_header and any other unverified reason when CURSOR_APP_ID is unset.
   return demoViewer();
 }

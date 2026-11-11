@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
+import { SearchPanel } from "@/components/dashboard/search-panel";
 import { TrackForm } from "@/components/dashboard/track-form";
 import { resolveViewer } from "@/lib/auth";
 import { getFetchMode } from "@/lib/fetcher/marcanet";
@@ -20,7 +21,7 @@ export default async function HomePage() {
     return (
       <main className="mx-auto flex min-h-full w-full max-w-2xl flex-1 flex-col justify-center gap-4 px-6 py-16">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[color:var(--teal-deep)]">
-          Monitor post-concesión
+          Monitor de marcas
         </p>
         <h1 className="font-[family-name:var(--font-display)] text-5xl tracking-tight text-[color:var(--ink)]">
           IMPI
@@ -33,36 +34,33 @@ export default async function HomePage() {
     );
   }
 
-  const mode = getFetchMode();
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
   const expiring = listExpiringWithin(viewer.ownerKey, 120);
+  const mode = getFetchMode();
+  const liveMode = mode !== "mock";
   const unread = notifications.filter((n) => !n.read).length;
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-      {viewer.demoMode && mode === "mock" ? (
+      {viewer.demoMode && !liveMode ? (
         <div
           role="status"
           className="animate-rise rounded-lg border border-[color:var(--brass)]/40 bg-[color:var(--brass)]/15 px-4 py-3 text-sm text-[color:var(--ink)]"
         >
-          <strong className="font-semibold">Modo muestra (mock).</strong> Auth
-          UI simulada y catálogo mock activos (
-          <code className="font-mono text-xs">IMPI_FETCH_MODE=mock</code>). No
-          es un inicio de sesión real con Cursor.
+          <strong className="font-semibold">Modo muestra.</strong> Catálogo mock
+          activo (`IMPI_FETCH_MODE=mock`). No es identidad Cursor real.
         </div>
       ) : null}
-      {viewer.demoMode && mode !== "mock" ? (
+
+      {viewer.demoMode && liveMode ? (
         <div
           role="status"
-          className="animate-rise rounded-lg border border-[color:var(--ink)]/15 bg-white/60 px-4 py-3 text-sm text-[color:var(--ink)]"
+          className="animate-rise rounded-lg border border-[color:var(--ink)]/15 bg-white/70 px-4 py-3 text-sm text-[color:var(--ink-soft)]"
         >
-          <strong className="font-semibold">Solo auth UI simulada.</strong>{" "}
-          Sin identidad Cursor verificada en este host. Las consultas van al
-          portal público Marcanet/SIGA (
-          <code className="font-mono text-xs">fetch mode: {mode}</code>
-          ) — no hay cartera seed ni catálogo mock. Da de alta un expediente
-          real para comenzar.
+          Vista sin identidad Cursor verificada (simulación UI). La cartera
+          empieza vacía; búsqueda y altas usan datos live de SIGA TuGaceta —
+          sin catálogo mock.
         </div>
       ) : null}
 
@@ -70,21 +68,21 @@ export default async function HomePage() {
         <div className="max-w-2xl">
           <p className="mb-3 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-[color:var(--teal-deep)]">
             <span className="live-dot size-1.5 rounded-full bg-[color:var(--brass)]" />
-            Monitor post-concesión
+            Monitor de marcas
           </p>
           <h1 className="font-[family-name:var(--font-display)] text-5xl leading-[0.95] tracking-tight text-[color:var(--ink)] sm:text-6xl">
             IMPI
           </h1>
           <p className="mt-3 max-w-xl text-base leading-relaxed text-[color:var(--ink-soft)]/90 sm:text-lg">
-            Cartera de marcas por expediente: declaración de uso, requerimientos,
-            oficios, caducidad y movimientos — con inbox de cambios.
+            Búsqueda en gacetas SIGA, alta por expediente y seguimiento de
+            movimientos — con export CSV/JSON e inbox de cambios.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             Sesión: {viewer.name || "usuario"}
             {viewer.demoMode
-              ? mode === "mock"
-                ? " (modo muestra)"
-                : " (auth UI simulada)"
+              ? liveMode
+                ? " (UI sin Cursor; live)"
+                : " (modo muestra)"
               : viewer.simulated
                 ? " (simulada en local)"
                 : ""}
@@ -124,6 +122,10 @@ export default async function HomePage() {
       </section>
 
       <section className="animate-rise-delay rounded-xl border border-[color:var(--ink)]/10 bg-white/60 p-4 sm:p-5">
+        <SearchPanel liveMode={liveMode} />
+      </section>
+
+      <section className="animate-rise-delay rounded-xl border border-[color:var(--ink)]/10 bg-white/60 p-4 sm:p-5">
         <h2 className="mb-3 font-[family-name:var(--font-display)] text-xl text-[color:var(--ink)]">
           Alta de expediente
         </h2>
@@ -137,7 +139,9 @@ export default async function HomePage() {
               Cartera
             </h2>
             <p className="text-xs text-muted-foreground">
-              Estatus actual · último movimiento · vigencia
+              {liveMode
+                ? "Vacía hasta que busques o des de alta un expediente"
+                : "Estatus actual · último movimiento · vigencia"}
             </p>
           </div>
           <MarksTable marks={marks} />
@@ -149,10 +153,11 @@ export default async function HomePage() {
       </div>
 
       <footer className="mt-auto border-t border-[color:var(--ink)]/10 pt-6 text-xs text-muted-foreground">
-        Capas: trigger/refresh → fetcher Marcanet/SIGA (live por defecto en
-        producción; mock solo con IMPI_FETCH_MODE=mock) → parser/diff → notifier
-        in-app. Fallos del portal se muestran en el inbox (sin catálogo falso).
-        PASE autenticado, MARCia y WhatsApp quedan fuera de v1.
+        Live: SIGA TuGaceta API (`:5007`, CSRF). La ruta SPA{" "}
+        <code className="font-mono">/newsiga/rest/expediente</code> no es JSON
+        usable. Captcha no se resuelve en Vercel; worker local con Playwright
+        (`IMPI_USE_PLAYWRIGHT=1` / <code className="font-mono">scripts/siga-worker.mjs</code>
+        ). Mock solo con <code className="font-mono">IMPI_FETCH_MODE=mock</code>.
       </footer>
     </main>
   );

@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start --port 3847 --hostname 127.0.0.1",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "siga:worker": "node scripts/siga-worker.mjs",
+    "siga:token": "IMPI_USE_PLAYWRIGHT=1 node scripts/siga-worker.mjs token"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.55.0"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

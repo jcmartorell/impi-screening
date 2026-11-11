@@ -1,12 +1,19 @@
 import { withExponentialBackoff, sleep } from "@/lib/fetcher/backoff";
 import { buildMockSnapshot } from "@/lib/fetcher/mock";
 import { parsePublicHtml } from "@/lib/parser";
+import {
+  fetchSnapshotByExpediente as fetchViaTuGaceta,
+} from "@/lib/fetcher/siga-tugaceta";
 import type { TrademarkSnapshot } from "@/lib/types";
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const INTER_CALL_DELAY_MS = 350;
 
-/** Public Marcanet/SIGA-style lookup URLs (best-effort; often rate-limited). */
+/**
+ * Legacy public HTML/SPA URLs. `/newsiga/rest/expediente/{id}` is an Angular
+ * shell with reCAPTCHA — usually not a parseable expediente payload.
+ * Prefer TuGaceta API (:5007) via `fetchViaTuGaceta`.
+ */
 const CANDIDATE_URLS = (expediente: string) => [
   `https://marcanet.impi.gob.mx/marcanet/vistas/common/datos/bsqExpedienteCompleto.pgi?expediente=${expediente}`,
   `https://siga.impi.gob.mx/newsiga/rest/expediente/${expediente}`,
@@ -43,7 +50,6 @@ function classifyPortalFailure(
   if (status === 403) return "forbidden";
   if (status === 503) return "forbidden";
   const lower = body.toLowerCase();
-  // Challenge / interstitial pages (not a mere recaptcha.js include on an SPA shell).
   if (
     lower.includes("just a moment") ||
     lower.includes("cf-challenge") ||
@@ -78,7 +84,7 @@ async function fetchWithTimeout(
       headers: {
         Accept: "application/json, text/html;q=0.9, */*;q=0.8",
         "User-Agent":
-          "IMPI-Monitor/0.1 (+local; respectful public lookup; contact practice)",
+          "IMPI-Monitor/0.2 (+local; respectful public lookup; contact practice)",
         "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
       },
       cache: "no-store",
@@ -91,7 +97,9 @@ async function fetchWithTimeout(
   }
 }
 
-async function tryLiveFetch(expediente: string): Promise<TrademarkSnapshot> {
+async function tryLegacyHtmlFetch(
+  expediente: string,
+): Promise<TrademarkSnapshot> {
   let lastError: Error | null = null;
 
   for (const url of CANDIDATE_URLS(expediente)) {
@@ -140,7 +148,31 @@ async function tryLiveFetch(expediente: string): Promise<TrademarkSnapshot> {
     }
   }
 
-  throw lastError ?? new Error("Live Marcanet/SIGA fetch failed");
+  throw lastError ?? new Error("Live Marcanet/SIGA HTML fetch failed");
+}
+
+async function tryLiveFetch(expediente: string): Promise<TrademarkSnapshot> {
+  const errors: string[] = [];
+
+  // 1) TuGaceta API (CSRF + optional captcha) — real public data path.
+  try {
+    return await fetchViaTuGaceta(expediente);
+  } catch (error) {
+    errors.push(
+      `TuGaceta: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  // 2) Legacy HTML / SPA URLs (often captcha shell or DNS fail for Marcanet).
+  try {
+    return await tryLegacyHtmlFetch(expediente);
+  } catch (error) {
+    errors.push(
+      `HTML: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  throw new Error(errors.join(" | "));
 }
 
 export async function fetchTrademarkSnapshot(
