@@ -240,14 +240,14 @@ export function searchHitToSnapshot(hit: SearchHit): TrademarkSnapshot {
   const expediente =
     (hit.expediente ?? "").replace(/\D/g, "") || String(hit.fichaId);
   const statusRaw =
-    hit.statusLabel ?? hit.seccion ?? hit.gaceta ?? "desconocida";
+    hit.statusLabel || hit.seccion || hit.gaceta || "desconocida";
   const status = normalizeStatus(statusRaw);
   return {
     expediente: expediente.padStart(7, "0").slice(-7),
     markName: hit.markName ?? `Ficha ${hit.fichaId}`,
     owner: hit.owner ?? "Titular no disponible",
     status,
-    statusLabel: hit.statusLabel ?? STATUS_LABELS[status],
+    statusLabel: hit.statusLabel || hit.seccion || STATUS_LABELS[status],
     classNice: hit.classNice ?? "—",
     grantDate: hit.grantDate,
     expiryDate: null,
@@ -465,11 +465,20 @@ export async function searchFichas(
     });
   }
 
-  hits.sort(
-    (a, b) =>
+  const keywordDigits = keyword.replace(/\D/g, "");
+  hits.sort((a, b) => {
+    if (keywordDigits.length >= 5) {
+      const aExact =
+        (a.expediente ?? "").replace(/\D/g, "") === keywordDigits ? 1 : 0;
+      const bExact =
+        (b.expediente ?? "").replace(/\D/g, "") === keywordDigits ? 1 : 0;
+      if (aExact !== bExact) return bExact - aExact;
+    }
+    return (
       parsePublicationSortKey(b.publicationDate) -
-      parsePublicationSortKey(a.publicationDate),
-  );
+      parsePublicationSortKey(a.publicationDate)
+    );
+  });
 
   const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
   return { hits: hits.slice(0, limit), rawCount: rows.length };

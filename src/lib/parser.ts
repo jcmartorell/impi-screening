@@ -8,7 +8,10 @@ const STATUS_PATTERNS: { status: TrademarkStatus; pattern: RegExp }[] = [
   { status: "requerimiento", pattern: /requerimiento/i },
   { status: "oficio", pattern: /oficio/i },
   { status: "renovacion", pattern: /renovaci[oó]n/i },
-  { status: "vigente", pattern: /vigente|concedid|registro/i },
+  {
+    status: "vigente",
+    pattern: /vigente|concedid|registro|marcas?\s+registrad/i,
+  },
   { status: "en_tramite", pattern: /tr[aá]mite|pendiente|solicitud/i },
 ];
 
