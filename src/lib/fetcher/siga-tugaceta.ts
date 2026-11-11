@@ -721,8 +721,10 @@ export async function searchFichas(
     if (result.rows.length >= TUGACETA_PAGE_CAP) capped = true;
     ingest(result.rows);
   } else {
-    // Per-gaceta loop — TuGaceta ignores page/offset; each gaceta can return
-    // up to ~1000, so 8 marca gacetas ≈ 8k unique hits for broad keywords.
+    // Breadth-first per gaceta — TuGaceta ignores page/offset and caps ~1000
+    // per call. Taking one page from each gaceta first (≈8k for marcas) keeps
+    // Conservación / Renovada Hasta in the pool; date-chunk only afterward.
+    const cappedGacetas: number[] = [];
     for (const g of idGaceta) {
       if (byFicha.size >= limit) break;
       const result = await fetchBatch(
@@ -732,37 +734,38 @@ export async function searchFichas(
         callIndex === 0,
       );
       if (!result.ok) {
-        // Soft-fail a single gaceta; hard-fail only if we have nothing yet.
         if (!byFicha.size) {
           return { hits: [], rawCount: 0, blocked: result.blocked };
         }
         console.warn(`[siga] GetFichas gaceta ${g}: ${result.blocked}`);
         continue;
       }
-
-      if (result.rows.length < TUGACETA_PAGE_CAP) {
-        ingest(result.rows);
-        continue;
+      ingest(result.rows);
+      if (result.rows.length >= TUGACETA_PAGE_CAP) {
+        capped = true;
+        cappedGacetas.push(g);
       }
+    }
 
-      // Cap hit: split by publication-year windows to pull more rows.
-      capped = true;
+    // Second pass: year windows only if we still have headroom.
+    if (byFicha.size < limit && cappedGacetas.length) {
       const chunks = defaultDateChunks(filters.dateFrom, filters.dateTo);
-      if (chunks.length <= 1) {
-        ingest(result.rows);
-        continue;
-      }
-      for (const chunk of chunks) {
-        if (byFicha.size >= limit) break;
-        const chunkRes = await fetchBatch([g], chunk.from, chunk.to, false);
-        if (!chunkRes.ok) {
-          console.warn(
-            `[siga] GetFichas gaceta ${g} chunk ${chunk.from}: ${chunkRes.blocked}`,
-          );
-          continue;
+      if (chunks.length > 1) {
+        for (const g of cappedGacetas) {
+          if (byFicha.size >= limit) break;
+          for (const chunk of chunks) {
+            if (byFicha.size >= limit) break;
+            const chunkRes = await fetchBatch([g], chunk.from, chunk.to, false);
+            if (!chunkRes.ok) {
+              console.warn(
+                `[siga] GetFichas gaceta ${g} chunk ${chunk.from}: ${chunkRes.blocked}`,
+              );
+              continue;
+            }
+            if (chunkRes.rows.length >= TUGACETA_PAGE_CAP) capped = true;
+            ingest(chunkRes.rows);
+          }
         }
-        if (chunkRes.rows.length >= TUGACETA_PAGE_CAP) capped = true;
-        ingest(chunkRes.rows);
       }
     }
   }
