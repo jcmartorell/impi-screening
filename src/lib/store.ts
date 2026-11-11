@@ -9,6 +9,11 @@ import type {
 } from "@/lib/types";
 import { DEFAULT_ALERT_EMAIL } from "@/lib/alert-defaults";
 import {
+  DEFAULT_DAILY_SCAN_CONFIG,
+  normalizeDailyScanConfig,
+  type DailyScanConfig,
+} from "@/lib/daily-scan-config";
+import {
   MAX_HISTORY_PER_MARK,
   MAX_NOTIFICATIONS_PER_OWNER,
   MAX_TRACKED_MARKS_PER_OWNER,
@@ -87,12 +92,48 @@ function migrate(db: Database.Database) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS daily_scan_hits (
+      owner_key TEXT NOT NULL,
+      expediente TEXT NOT NULL,
+      mark_name TEXT NOT NULL DEFAULT '',
+      class_nice TEXT NOT NULL DEFAULT '',
+      expiry_date TEXT NOT NULL,
+      ficha_id INTEGER,
+      snapshot_json TEXT,
+      found_at TEXT NOT NULL,
+      emailed INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (owner_key, expediente)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_marks_owner ON tracked_marks(owner_key);
     CREATE INDEX IF NOT EXISTS idx_history_owner_exp
       ON status_history(owner_key, expediente, recorded_at);
     CREATE INDEX IF NOT EXISTS idx_notif_owner_created
       ON notifications(owner_key, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_scan_hits_owner_expiry
+      ON daily_scan_hits(owner_key, expiry_date);
   `);
+
+  // Additive columns for daily scan config (safe on existing DBs).
+  const settingsCols = db
+    .prepare(`PRAGMA table_info(owner_settings)`)
+    .all() as { name: string }[];
+  const settingsNames = new Set(settingsCols.map((c) => c.name));
+  if (!settingsNames.has("daily_scan_json")) {
+    db.exec(
+      `ALTER TABLE owner_settings ADD COLUMN daily_scan_json TEXT NOT NULL DEFAULT ''`,
+    );
+  }
+  if (!settingsNames.has("daily_scan_updated_at")) {
+    db.exec(
+      `ALTER TABLE owner_settings ADD COLUMN daily_scan_updated_at TEXT`,
+    );
+  }
+  if (!settingsNames.has("daily_scan_last_run_at")) {
+    db.exec(
+      `ALTER TABLE owner_settings ADD COLUMN daily_scan_last_run_at TEXT`,
+    );
+  }
 }
 
 export type OwnerSettings = {
@@ -101,19 +142,68 @@ export type OwnerSettings = {
   updatedAt: string | null;
   /** True when the value comes from DEFAULT_ALERT_EMAIL (no saved row yet). */
   usingDefault: boolean;
+  dailyScan: DailyScanConfig;
+  dailyScanUpdatedAt: string | null;
+  dailyScanLastRunAt: string | null;
+  /** True when daily_scan_json was never saved for this owner. */
+  dailyScanUsingDefault: boolean;
 };
+
+function parseDailyScanRow(
+  row: Record<string, unknown> | undefined,
+): Pick<
+  OwnerSettings,
+  "dailyScan" | "dailyScanUpdatedAt" | "dailyScanLastRunAt" | "dailyScanUsingDefault"
+> {
+  const raw = row?.daily_scan_json ? String(row.daily_scan_json) : "";
+  if (!raw) {
+    return {
+      dailyScan: { ...DEFAULT_DAILY_SCAN_CONFIG },
+      dailyScanUpdatedAt: null,
+      dailyScanLastRunAt: row?.daily_scan_last_run_at
+        ? String(row.daily_scan_last_run_at)
+        : null,
+      dailyScanUsingDefault: true,
+    };
+  }
+  try {
+    return {
+      dailyScan: normalizeDailyScanConfig(
+        JSON.parse(raw) as Partial<DailyScanConfig>,
+      ),
+      dailyScanUpdatedAt: row?.daily_scan_updated_at
+        ? String(row.daily_scan_updated_at)
+        : null,
+      dailyScanLastRunAt: row?.daily_scan_last_run_at
+        ? String(row.daily_scan_last_run_at)
+        : null,
+      dailyScanUsingDefault: false,
+    };
+  } catch {
+    return {
+      dailyScan: { ...DEFAULT_DAILY_SCAN_CONFIG },
+      dailyScanUpdatedAt: null,
+      dailyScanLastRunAt: row?.daily_scan_last_run_at
+        ? String(row.daily_scan_last_run_at)
+        : null,
+      dailyScanUsingDefault: true,
+    };
+  }
+}
 
 export function getOwnerSettings(ownerKey: string): OwnerSettings {
   const db = getDb();
   const row = db
     .prepare(`SELECT * FROM owner_settings WHERE owner_key = ?`)
     .get(ownerKey) as Record<string, unknown> | undefined;
+  const scan = parseDailyScanRow(row);
   if (!row) {
     return {
       ownerKey,
       alertEmail: DEFAULT_ALERT_EMAIL,
       updatedAt: null,
       usingDefault: true,
+      ...scan,
     };
   }
   return {
@@ -121,7 +211,20 @@ export function getOwnerSettings(ownerKey: string): OwnerSettings {
     alertEmail: String(row.alert_email ?? ""),
     updatedAt: row.updated_at ? String(row.updated_at) : null,
     usingDefault: false,
+    ...scan,
   };
+}
+
+function ensureOwnerSettingsRow(ownerKey: string): void {
+  const db = getDb();
+  const existing = db
+    .prepare(`SELECT owner_key FROM owner_settings WHERE owner_key = ?`)
+    .get(ownerKey);
+  if (existing) return;
+  db.prepare(
+    `INSERT INTO owner_settings (owner_key, alert_email, updated_at)
+     VALUES (?, '', ?)`,
+  ).run(ownerKey, new Date().toISOString());
 }
 
 export function setOwnerAlertEmail(
@@ -143,6 +246,225 @@ export function setOwnerAlertEmail(
     updated_at: updatedAt,
   });
   return getOwnerSettings(ownerKey);
+}
+
+export function setOwnerDailyScanConfig(
+  ownerKey: string,
+  config: Partial<DailyScanConfig>,
+): OwnerSettings {
+  const db = getDb();
+  ensureOwnerSettingsRow(ownerKey);
+  const normalized = normalizeDailyScanConfig(config);
+  const updatedAt = new Date().toISOString();
+  db.prepare(
+    `UPDATE owner_settings
+     SET daily_scan_json = @daily_scan_json,
+         daily_scan_updated_at = @daily_scan_updated_at,
+         updated_at = COALESCE(updated_at, @daily_scan_updated_at)
+     WHERE owner_key = @owner_key`,
+  ).run({
+    owner_key: ownerKey,
+    daily_scan_json: JSON.stringify(normalized),
+    daily_scan_updated_at: updatedAt,
+  });
+  return getOwnerSettings(ownerKey);
+}
+
+export function touchDailyScanLastRun(
+  ownerKey: string,
+  at = new Date().toISOString(),
+): void {
+  const db = getDb();
+  ensureOwnerSettingsRow(ownerKey);
+  db.prepare(
+    `UPDATE owner_settings SET daily_scan_last_run_at = ? WHERE owner_key = ?`,
+  ).run(at, ownerKey);
+}
+
+/** Owners with an enabled daily scan config saved in SQLite. */
+export function listOwnerKeysWithDailyScanEnabled(): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT owner_key, daily_scan_json FROM owner_settings
+       WHERE daily_scan_json IS NOT NULL AND daily_scan_json != ''`,
+    )
+    .all() as { owner_key: string; daily_scan_json: string }[];
+  const out: string[] = [];
+  for (const row of rows) {
+    try {
+      const cfg = normalizeDailyScanConfig(
+        JSON.parse(row.daily_scan_json) as Partial<DailyScanConfig>,
+      );
+      if (cfg.enabled) out.push(row.owner_key);
+    } catch {
+      /* skip */
+    }
+  }
+  return out;
+}
+
+export type DailyScanHit = {
+  expediente: string;
+  markName: string;
+  classNice: string;
+  expiryDate: string;
+  fichaId: number | null;
+  snapshot: TrademarkSnapshot | null;
+  foundAt: string;
+  emailed: boolean;
+};
+
+function mapScanHit(row: Record<string, unknown>): DailyScanHit {
+  return {
+    expediente: String(row.expediente),
+    markName: String(row.mark_name ?? ""),
+    classNice: String(row.class_nice ?? ""),
+    expiryDate: String(row.expiry_date),
+    fichaId:
+      row.ficha_id == null || row.ficha_id === ""
+        ? null
+        : Number(row.ficha_id),
+    snapshot: row.snapshot_json
+      ? (JSON.parse(String(row.snapshot_json)) as TrademarkSnapshot)
+      : null,
+    foundAt: String(row.found_at),
+    emailed: Boolean(row.emailed),
+  };
+}
+
+export function listDailyScanHits(
+  ownerKey: string,
+  days?: number,
+): DailyScanHit[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM daily_scan_hits WHERE owner_key = ?
+       ORDER BY expiry_date ASC`,
+    )
+    .all(ownerKey) as Record<string, unknown>[];
+  let hits = rows.map(mapScanHit);
+  if (days != null && Number.isFinite(days)) {
+    const now = Date.now();
+    const horizon = now + days * 24 * 60 * 60 * 1000;
+    hits = hits.filter((h) => {
+      const t = Date.parse(h.expiryDate);
+      return Number.isFinite(t) && t >= now && t <= horizon;
+    });
+  }
+  return hits;
+}
+
+export function replaceDailyScanHits(
+  ownerKey: string,
+  hits: Array<{
+    expediente: string;
+    markName: string;
+    classNice?: string;
+    expiryDate: string;
+    fichaId?: number | null;
+    snapshot?: TrademarkSnapshot | null;
+    emailed?: boolean;
+  }>,
+): DailyScanHit[] {
+  const db = getDb();
+  const previous = new Map(
+    listDailyScanHits(ownerKey).map((h) => [h.expediente, h]),
+  );
+  const foundAt = new Date().toISOString();
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM daily_scan_hits WHERE owner_key = ?`).run(ownerKey);
+    const insert = db.prepare(
+      `INSERT INTO daily_scan_hits
+        (owner_key, expediente, mark_name, class_nice, expiry_date, ficha_id, snapshot_json, found_at, emailed)
+       VALUES (@owner_key, @expediente, @mark_name, @class_nice, @expiry_date, @ficha_id, @snapshot_json, @found_at, @emailed)`,
+    );
+    for (const hit of hits) {
+      const digits = hit.expediente.replace(/\D/g, "");
+      if (!digits) continue;
+      const prev = previous.get(digits);
+      insert.run({
+        owner_key: ownerKey,
+        expediente: digits.length >= 7 ? digits.slice(0, 7) : digits.padStart(7, "0"),
+        mark_name: (hit.markName || "").slice(0, 200),
+        class_nice: (hit.classNice || "").slice(0, 40),
+        expiry_date: hit.expiryDate,
+        ficha_id: hit.fichaId ?? null,
+        snapshot_json: hit.snapshot ? JSON.stringify(hit.snapshot) : null,
+        found_at: foundAt,
+        emailed: (hit.emailed ?? Boolean(prev?.emailed)) ? 1 : 0,
+      });
+    }
+  });
+  tx();
+  return listDailyScanHits(ownerKey);
+}
+
+export function markDailyScanHitsEmailed(
+  ownerKey: string,
+  expedientes: string[],
+): void {
+  if (!expedientes.length) return;
+  const db = getDb();
+  const stmt = db.prepare(
+    `UPDATE daily_scan_hits SET emailed = 1
+     WHERE owner_key = ? AND expediente = ?`,
+  );
+  const tx = db.transaction(() => {
+    for (const exp of expedientes) {
+      const digits = exp.replace(/\D/g, "");
+      if (!digits) continue;
+      stmt.run(ownerKey, digits.length >= 7 ? digits.slice(0, 7) : digits.padStart(7, "0"));
+    }
+  });
+  tx();
+}
+
+/** Merge tracked portfolio expiry + daily scan hits (dedupe by expediente). */
+export function listExpiringCombined(
+  ownerKey: string,
+  days: number,
+): Array<TrackedMark & { source: "tracked" | "scan" }> {
+  const tracked = listExpiringWithin(ownerKey, days).map((m) => ({
+    ...m,
+    source: "tracked" as const,
+  }));
+  const seen = new Set(tracked.map((m) => m.expediente));
+  const fromScan: Array<TrackedMark & { source: "tracked" | "scan" }> = [];
+  for (const hit of listDailyScanHits(ownerKey, days)) {
+    if (seen.has(hit.expediente)) continue;
+    seen.add(hit.expediente);
+    fromScan.push({
+      expediente: hit.expediente,
+      clientLabel: "",
+      notes: "Escaneo diario",
+      trackedAt: hit.foundAt,
+      lastRefreshedAt: hit.foundAt,
+      current:
+        hit.snapshot ??
+        ({
+          expediente: hit.expediente,
+          markName: hit.markName || `Expediente ${hit.expediente}`,
+          owner: "—",
+          status: "desconocida",
+          statusLabel: "Escaneo diario",
+          classNice: hit.classNice || "—",
+          grantDate: null,
+          expiryDate: hit.expiryDate,
+          lastMovementDate: null,
+          movements: [],
+          fetchedAt: hit.foundAt,
+          source: "live",
+        } satisfies TrademarkSnapshot),
+      source: "scan",
+    });
+  }
+  return [...tracked, ...fromScan].sort((a, b) =>
+    String(a.current?.expiryDate ?? "").localeCompare(
+      String(b.current?.expiryDate ?? ""),
+    ),
+  );
 }
 
 /** Distinct owners that currently have at least one tracked expediente. */
@@ -223,6 +545,8 @@ export function upsertTrackedMark(input: {
   notes?: string;
   current?: TrademarkSnapshot | null;
   lastRefreshedAt?: string | null;
+  /** Preserve cookie/original track time on hydrate. */
+  trackedAt?: string;
   /** When true, refuse insert if owner is at cap (updates still allowed). */
   enforceCap?: boolean;
 }): TrackedMark | { error: "cap_exceeded"; max: number } {
@@ -235,7 +559,8 @@ export function upsertTrackedMark(input: {
     }
   }
 
-  const trackedAt = existing?.trackedAt ?? new Date().toISOString();
+  const trackedAt =
+    existing?.trackedAt ?? input.trackedAt ?? new Date().toISOString();
   const clientLabel = input.clientLabel ?? existing?.clientLabel ?? "";
   const notes = input.notes ?? existing?.notes ?? "";
   const current =

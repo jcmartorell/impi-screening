@@ -127,9 +127,19 @@ export async function requireViewer(
   return viewer;
 }
 
-export function jsonPrivate(data: unknown, init?: ResponseInit): Response {
+export function jsonPrivate(
+  data: unknown,
+  init?: ResponseInit & { setCookies?: string[] },
+): Response {
+  const headers = privateNoStore(init);
+  for (const cookie of init?.setCookies ?? []) {
+    headers.append("Set-Cookie", cookie);
+  }
+  // Avoid leaking custom field into ResponseInit clones.
+  const { setCookies: _setCookies, ...rest } = init ?? {};
+  void _setCookies;
   return Response.json(data, {
-    ...init,
-    headers: privateNoStore(init),
+    ...rest,
+    headers,
   });
 }

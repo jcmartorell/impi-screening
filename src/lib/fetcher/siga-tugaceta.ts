@@ -208,11 +208,84 @@ function pick(map: Record<string, string>, keys: string[]): string | null {
   return null;
 }
 
+/** Normalize TuGaceta date strings to yyyy-MM-dd when possible. */
+export function toIsoDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const dmY = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (dmY) return `${dmY[3]}-${dmY[2]}-${dmY[1]}`;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const parsed = Date.parse(s);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+
+function addYearsIso(iso: string, years: number): string | null {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCFullYear(d.getUTCFullYear() + years);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Prefer explicit vigencia fields; for marcas fall back to concesión (+ 10 años).
+ * "Registro de Marca" is often a registration *number*, not a date — ignore non-dates.
+ */
+export function inferExpiryDateFromDatos(
+  raw: Record<string, string>,
+  options?: {
+    grantDate?: string | null;
+    registro?: string | null;
+    idArea?: string;
+    statusLabel?: string | null;
+    seccion?: string | null;
+  },
+): string | null {
+  const explicit = toIsoDate(
+    pick(raw, [
+      "Vigencia",
+      "Fecha de vigencia",
+      "Fecha de Vigencia",
+      "Vigencia hasta",
+      "Fecha de vencimiento",
+      "Vencimiento",
+      "Fecha vigencia",
+    ]),
+  );
+  if (explicit) return explicit;
+
+  const idArea = String(options?.idArea ?? MARCA_AREA_ID);
+  // Mexican trademarks: 10-year term from registration/grant.
+  if (idArea === MARCA_AREA_ID) {
+    const oficioKind = `${options?.statusLabel ?? ""} ${options?.seccion ?? ""} ${pick(raw, ["Descripción del oficio", "Estatus", "Estado"]) ?? ""}`;
+    const concesionOficio = /concesi[oó]n/i.test(oficioKind)
+      ? toIsoDate(pick(raw, ["Fecha del oficio"]))
+      : null;
+
+    const base =
+      toIsoDate(options?.grantDate) ||
+      toIsoDate(
+        pick(raw, ["Fecha de Concesión", "Fecha de Concesion", "Fecha de Registro"]),
+      ) ||
+      concesionOficio ||
+      // Only if registro looks like a date (not a registry number).
+      toIsoDate(options?.registro);
+    if (base) return addYearsIso(base, 10);
+  }
+  return null;
+}
+
 export function mapFichaToSearchHit(
   row: SigaFichaHit,
   source: "live" | "mock" = "live",
 ): SearchHit {
   const raw = datosMap(row.datos);
+  const grantDate = pick(raw, ["Fecha de Concesión", "Fecha de Concesion"]);
+  const registro = pick(raw, ["Registro de Marca", "Registro"]);
   return {
     fichaId: row.fichaId,
     expediente: pick(raw, ["Expediente"]),
@@ -229,19 +302,29 @@ export function mapFichaToSearchHit(
     gaceta: row.gaceta,
     seccion: row.seccion,
     publicationDate: row.fechaPuestaCirculacion || null,
-    registro: pick(raw, ["Registro de Marca", "Registro"]),
-    grantDate: pick(raw, ["Fecha de Concesión", "Fecha de Concesion"]),
+    registro,
+    grantDate,
     rawDatos: raw,
     source,
   };
 }
 
-export function searchHitToSnapshot(hit: SearchHit): TrademarkSnapshot {
+export function searchHitToSnapshot(
+  hit: SearchHit,
+  options?: { idArea?: string },
+): TrademarkSnapshot {
   const expediente =
     (hit.expediente ?? "").replace(/\D/g, "") || String(hit.fichaId);
   const statusRaw =
     hit.statusLabel || hit.seccion || hit.gaceta || "desconocida";
   const status = normalizeStatus(statusRaw);
+  const expiryDate = inferExpiryDateFromDatos(hit.rawDatos ?? {}, {
+    grantDate: hit.grantDate,
+    registro: hit.registro,
+    idArea: options?.idArea,
+    statusLabel: hit.statusLabel,
+    seccion: hit.seccion,
+  });
   return {
     expediente: expediente.padStart(7, "0").slice(-7),
     markName: hit.markName ?? `Ficha ${hit.fichaId}`,
@@ -249,8 +332,8 @@ export function searchHitToSnapshot(hit: SearchHit): TrademarkSnapshot {
     status,
     statusLabel: hit.statusLabel || hit.seccion || STATUS_LABELS[status],
     classNice: hit.classNice ?? "—",
-    grantDate: hit.grantDate,
-    expiryDate: null,
+    grantDate: toIsoDate(hit.grantDate) ?? hit.grantDate,
+    expiryDate,
     lastMovementDate: hit.publicationDate,
     movements: hit.publicationDate
       ? [

@@ -2,9 +2,11 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { rememberExpedienteLocally } from "@/components/dashboard/portfolio-sync";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { TrademarkSnapshot } from "@/lib/types";
 
 export function TrackForm() {
   const router = useRouter();
@@ -25,6 +27,7 @@ export function TrackForm() {
     startTransition(async () => {
       const res = await fetch("/api/marks", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           expediente: digits,
@@ -35,7 +38,13 @@ export function TrackForm() {
         error?: string;
         source?: string;
         ok?: boolean;
+        snapshot?: TrademarkSnapshot;
       };
+      // Persist locally even if live refresh failed (placeholder still tracked).
+      rememberExpedienteLocally(digits, {
+        clientLabel: clientLabel.trim() || undefined,
+        current: data.snapshot,
+      });
       if (!res.ok) {
         setError(
           data.error ??

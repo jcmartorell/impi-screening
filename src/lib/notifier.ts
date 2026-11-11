@@ -1,6 +1,7 @@
 import { emailModificationAlerts } from "@/lib/email";
 import type { SnapshotDiff } from "@/lib/diff";
-import { addNotification, getOwnerSettings } from "@/lib/store";
+import { resolveAlertEmail } from "@/lib/portfolio-cookie";
+import { addNotification } from "@/lib/store";
 import type { AppNotification, TrademarkSnapshot } from "@/lib/types";
 import { STATUS_LABELS } from "@/lib/types";
 
@@ -95,8 +96,7 @@ export async function dispatchEmailAlerts(
   ownerKey: string,
   notifications: AppNotification[],
 ): Promise<void> {
-  const settings = getOwnerSettings(ownerKey);
-  await emailModificationAlerts(settings.alertEmail, notifications);
+  await emailModificationAlerts(resolveAlertEmail(ownerKey), notifications);
 }
 
 /** Visible notice when live/auto portal lookup fails (no silent mock). */

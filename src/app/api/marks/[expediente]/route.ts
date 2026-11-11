@@ -1,5 +1,9 @@
 import { jsonPrivate, requireViewer } from "@/lib/auth";
 import { assertRefreshAllowed } from "@/lib/limits";
+import {
+  hydratePortfolioForRequest,
+  portfolioSetCookie,
+} from "@/lib/portfolio";
 import { getTrackedMark, listHistory } from "@/lib/store";
 import { refreshExpediente } from "@/lib/refresh";
 import {
@@ -15,6 +19,8 @@ type Ctx = { params: Promise<{ expediente: string }> };
 export async function GET(request: Request, context: Ctx) {
   const viewer = await requireViewer(request);
   if (viewer instanceof Response) return viewer;
+
+  hydratePortfolioForRequest(viewer.ownerKey, request);
 
   const { expediente: raw } = await context.params;
   const expediente = raw.replace(/\D/g, "");
@@ -42,18 +48,28 @@ export async function GET(request: Request, context: Ctx) {
     }
     const result = await refreshExpediente(viewer.ownerKey, expediente);
     if (!result.ok) {
-      return jsonPrivate({ ...result, mode }, { status: 502 });
+      return jsonPrivate(
+        { ...result, mode },
+        {
+          status: 502,
+          setCookies: [portfolioSetCookie(viewer.ownerKey)],
+        },
+      );
     }
   }
 
   const tracked = getTrackedMark(viewer.ownerKey, expediente);
   if (tracked?.current) {
-    return jsonPrivate({
-      tracked: true,
-      mark: tracked,
-      history: listHistory(viewer.ownerKey, expediente, 10),
-      mode,
-    });
+    return jsonPrivate(
+      {
+        tracked: true,
+        mark: tracked,
+        history: listHistory(viewer.ownerKey, expediente, 10),
+        mode,
+        persist: "cookie",
+      },
+      { setCookies: [portfolioSetCookie(viewer.ownerKey)] },
+    );
   }
 
   // Untracked lookup: respect fetch mode (live/auto hit Marcanet; mock only if explicit).
