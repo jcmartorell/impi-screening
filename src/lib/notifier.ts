@@ -1,5 +1,6 @@
-import { addNotification } from "@/lib/store";
+import { emailModificationAlerts } from "@/lib/email";
 import type { SnapshotDiff } from "@/lib/diff";
+import { addNotification, getOwnerSettings } from "@/lib/store";
 import type { AppNotification, TrademarkSnapshot } from "@/lib/types";
 import { STATUS_LABELS } from "@/lib/types";
 
@@ -28,6 +29,7 @@ export function notifyFromDiff(
     );
   }
 
+  // Only email on real modifications vs history — not on first track snapshot.
   if (diff.statusChanged && diff.previousStatus) {
     created.push(
       addNotification(ownerKey, {
@@ -54,7 +56,8 @@ export function notifyFromDiff(
     );
   }
 
-  if (snapshot.expiryDate) {
+  // Expiry alert only when vigencia itself changed (avoids cron spam every poll).
+  if (diff.expiryChanged && snapshot.expiryDate && diff.previousStatus !== null) {
     const days =
       (Date.parse(snapshot.expiryDate) - Date.now()) / (24 * 60 * 60 * 1000);
     if (days >= 0 && days <= 120) {
@@ -85,6 +88,15 @@ export function notifyFromDiff(
   }
 
   return created;
+}
+
+/** Fire-and-forget email for modification notifications (Resend / SMTP / log). */
+export async function dispatchEmailAlerts(
+  ownerKey: string,
+  notifications: AppNotification[],
+): Promise<void> {
+  const settings = getOwnerSettings(ownerKey);
+  await emailModificationAlerts(settings.alertEmail, notifications);
 }
 
 /** Visible notice when live/auto portal lookup fails (no silent mock). */

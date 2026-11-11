@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { AlertSettings } from "@/components/dashboard/alert-settings";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
@@ -7,6 +8,7 @@ import { TrackForm } from "@/components/dashboard/track-form";
 import { resolveViewer } from "@/lib/auth";
 import { getFetchMode } from "@/lib/fetcher/marcanet";
 import {
+  getOwnerSettings,
   listExpiringWithin,
   listNotifications,
   listTrackedMarks,
@@ -37,9 +39,18 @@ export default async function HomePage() {
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
   const expiring = listExpiringWithin(viewer.ownerKey, 120);
+  const settings = getOwnerSettings(viewer.ownerKey);
   const mode = getFetchMode();
   const liveMode = mode !== "mock";
   const unread = notifications.filter((n) => !n.read).length;
+  const emailTransport: "resend" | "smtp" | "log" = process.env
+    .RESEND_API_KEY?.trim()
+    ? "resend"
+    : process.env.SMTP_HOST?.trim() &&
+        process.env.SMTP_USER?.trim() &&
+        process.env.SMTP_PASS?.trim()
+      ? "smtp"
+      : "log";
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
@@ -74,8 +85,8 @@ export default async function HomePage() {
             IMPI
           </h1>
           <p className="mt-3 max-w-xl text-base leading-relaxed text-[color:var(--ink-soft)]/90 sm:text-lg">
-            Busca en gacetas SIGA, exporta resultados y opcionalmente sigue
-            expedientes — con inbox de cambios.
+            Busca en gacetas SIGA y, por separado, monitorea expedientes en
+            seguimiento con inbox y alertas por correo.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             Sesión: {viewer.name || "usuario"}
@@ -121,41 +132,80 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="animate-rise-delay rounded-xl border border-[color:var(--ink)]/10 bg-white/60 p-4 sm:p-5">
+      <section
+        id="busqueda"
+        className="animate-rise-delay rounded-xl border border-[color:var(--ink)]/10 bg-white/60 p-4 sm:p-5"
+      >
+        <div className="mb-3 border-b border-[color:var(--ink)]/8 pb-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--teal-deep)]">
+            Búsqueda
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Consulta gacetas SIGA / TuGaceta. Independiente del monitoreo.
+          </p>
+        </div>
         <SearchPanel liveMode={liveMode} />
       </section>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
-        <section className="min-w-0 space-y-6">
-          <div>
-            <div className="mb-3 flex items-end justify-between gap-3">
-              <h2 className="font-[family-name:var(--font-display)] text-2xl text-[color:var(--ink)]">
-                Cartera
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                {liveMode
-                  ? "Vacía hasta que busques y sigas un expediente"
-                  : "Estatus actual · último movimiento · vigencia"}
-              </p>
-            </div>
-            <MarksTable marks={marks} />
-          </div>
-          <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
-            <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
-              Seguir por expediente
-            </h2>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Opcional: si ya conoces el número de 7 dígitos, añádelo a
-              seguimiento sin pasar por búsqueda.
-            </p>
-            <TrackForm />
-          </div>
-        </section>
+      <section
+        id="monitoreo"
+        className="animate-rise-delay space-y-4 border-t border-[color:var(--ink)]/10 pt-8"
+      >
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[color:var(--teal-deep)]">
+            Seguimiento / monitoreo
+          </p>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Solo expedientes que eliges seguir. El cron y el botón Actualizar
+            detectan cambios vs historial y pueden enviar email.
+          </p>
+        </div>
 
-        <aside className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
-          <NotificationsPanel notifications={notifications} />
-        </aside>
-      </div>
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
+          <div className="min-w-0 space-y-6">
+            <div>
+              <div className="mb-3 flex items-end justify-between gap-3">
+                <h2 className="font-[family-name:var(--font-display)] text-2xl text-[color:var(--ink)]">
+                  Cartera
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  {liveMode
+                    ? "Vacía hasta que busques y sigas un expediente"
+                    : "Estatus actual · último movimiento · vigencia"}
+                </p>
+              </div>
+              <MarksTable marks={marks} />
+            </div>
+            <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
+              <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
+                Seguir por expediente
+              </h2>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Opcional: si ya conoces el número de 7 dígitos, añádelo a
+                seguimiento sin pasar por búsqueda.
+              </p>
+              <TrackForm />
+            </div>
+            <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
+              <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
+                Ajustes de alertas
+              </h2>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Destino de correo cuando hay modificación en un expediente
+                monitoreado.
+              </p>
+              <AlertSettings
+                initialEmail={settings.alertEmail}
+                emailTransport={emailTransport}
+              />
+            </div>
+          </div>
+
+          <aside className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
+            <NotificationsPanel notifications={notifications} />
+          </aside>
+        </div>
+      </section>
 
       <footer className="mt-auto border-t border-[color:var(--ink)]/10 pt-6 text-xs text-muted-foreground">
         Live: SIGA TuGaceta API (`:5007`, CSRF). La ruta SPA{" "}

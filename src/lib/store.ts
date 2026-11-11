@@ -80,12 +80,71 @@ function migrate(db: Database.Database) {
       read INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS owner_settings (
+      owner_key TEXT PRIMARY KEY,
+      alert_email TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_marks_owner ON tracked_marks(owner_key);
     CREATE INDEX IF NOT EXISTS idx_history_owner_exp
       ON status_history(owner_key, expediente, recorded_at);
     CREATE INDEX IF NOT EXISTS idx_notif_owner_created
       ON notifications(owner_key, created_at DESC);
   `);
+}
+
+export type OwnerSettings = {
+  ownerKey: string;
+  alertEmail: string;
+  updatedAt: string | null;
+};
+
+export function getOwnerSettings(ownerKey: string): OwnerSettings {
+  const db = getDb();
+  const row = db
+    .prepare(`SELECT * FROM owner_settings WHERE owner_key = ?`)
+    .get(ownerKey) as Record<string, unknown> | undefined;
+  if (!row) {
+    return { ownerKey, alertEmail: "", updatedAt: null };
+  }
+  return {
+    ownerKey,
+    alertEmail: String(row.alert_email ?? ""),
+    updatedAt: row.updated_at ? String(row.updated_at) : null,
+  };
+}
+
+export function setOwnerAlertEmail(
+  ownerKey: string,
+  alertEmail: string,
+): OwnerSettings {
+  const db = getDb();
+  const cleaned = alertEmail.trim();
+  const updatedAt = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO owner_settings (owner_key, alert_email, updated_at)
+     VALUES (@owner_key, @alert_email, @updated_at)
+     ON CONFLICT(owner_key) DO UPDATE SET
+       alert_email = excluded.alert_email,
+       updated_at = excluded.updated_at`,
+  ).run({
+    owner_key: ownerKey,
+    alert_email: cleaned,
+    updated_at: updatedAt,
+  });
+  return getOwnerSettings(ownerKey);
+}
+
+/** Distinct owners that currently have at least one tracked expediente. */
+export function listOwnerKeysWithTrackedMarks(): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT owner_key FROM tracked_marks ORDER BY owner_key ASC`,
+    )
+    .all() as { owner_key: string }[];
+  return rows.map((r) => r.owner_key);
 }
 
 export function getDb(): Database.Database {

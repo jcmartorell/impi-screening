@@ -2,6 +2,7 @@ import { fetchTrademarkSnapshot, getFetchMode } from "@/lib/fetcher/marcanet";
 import { sleep } from "@/lib/fetcher/backoff";
 import { diffSnapshots } from "@/lib/diff";
 import {
+  dispatchEmailAlerts,
   notifyFetchFailure,
   notifyFromDiff,
   notifyPaseStub,
@@ -13,6 +14,7 @@ import {
 import {
   addHistoryEntry,
   getTrackedMark,
+  listOwnerKeysWithTrackedMarks,
   listTrackedMarks,
   upsertTrackedMark,
 } from "@/lib/store";
@@ -89,6 +91,17 @@ export async function refreshExpediente(
       usedMockFallback: false,
     });
 
+    // First track is "en seguimiento", not a modification vs history.
+    if (!options?.firstTrack && previous) {
+      void dispatchEmailAlerts(ownerKey, notifications).catch((error) => {
+        console.warn(
+          "[impi-email] dispatch failed",
+          normalized,
+          error instanceof Error ? error.message : error,
+        );
+      });
+    }
+
     void notifyPaseStub({
       expediente: normalized,
       message: `Refresh ${normalized} source=${snapshot.source} mode=${mode}`,
@@ -131,4 +144,29 @@ export async function refreshAllTracked(
     await sleep(PORTAL_CALL_GAP_MS);
   }
   return results;
+}
+
+export type CronOwnerRefresh = {
+  ownerKey: string;
+  count: number;
+  failed: number;
+  changed: number;
+  results: RefreshResult[];
+};
+
+/** Cron path: refresh every owner that has a seguimiento list. */
+export async function refreshAllOwnersForCron(): Promise<CronOwnerRefresh[]> {
+  const owners = listOwnerKeysWithTrackedMarks();
+  const out: CronOwnerRefresh[] = [];
+  for (const ownerKey of owners) {
+    const results = await refreshAllTracked(ownerKey);
+    out.push({
+      ownerKey,
+      count: results.length,
+      failed: results.filter((r) => !r.ok).length,
+      changed: results.filter((r) => r.changed).length,
+      results,
+    });
+  }
+  return out;
 }

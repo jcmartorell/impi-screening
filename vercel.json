@@ -1,5 +1,11 @@
 {
   "env": {
     "IMPI_FETCH_MODE": "live"
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/refresh",
+      "schedule": "0 */6 * * *"
+    }
+  ]
 }
