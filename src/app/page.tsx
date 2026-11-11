@@ -1,13 +1,18 @@
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { AlertSettings } from "@/components/dashboard/alert-settings";
 import { ExpiringPanel } from "@/components/dashboard/expiring-panel";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
+import { PortfolioSync } from "@/components/dashboard/portfolio-sync";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
 import { SearchPanel } from "@/components/dashboard/search-panel";
 import { TrackForm } from "@/components/dashboard/track-form";
 import { resolveViewer } from "@/lib/auth";
 import { getFetchMode } from "@/lib/fetcher/marcanet";
+import {
+  hydratePortfolioFromCookieValue,
+  PORTFOLIO_COOKIE,
+} from "@/lib/portfolio";
 import {
   getOwnerSettings,
   listExpiringWithin,
@@ -37,6 +42,13 @@ export default async function HomePage() {
     );
   }
 
+  // Cookie is the durable source of truth on Vercel (/tmp SQLite is ephemeral).
+  const jar = await cookies();
+  hydratePortfolioFromCookieValue(
+    viewer.ownerKey,
+    jar.get(PORTFOLIO_COOKIE)?.value,
+  );
+
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
   const expiringSoon = listExpiringWithin(viewer.ownerKey, 30);
@@ -56,6 +68,7 @@ export default async function HomePage() {
 
   return (
     <main className="relative mx-auto flex w-full max-w-7xl flex-1 flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+      <PortfolioSync serverCount={marks.length} serverMarks={marks} />
       {viewer.demoMode && !liveMode ? (
         <div
           role="status"

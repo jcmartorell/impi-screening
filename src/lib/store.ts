@@ -223,6 +223,8 @@ export function upsertTrackedMark(input: {
   notes?: string;
   current?: TrademarkSnapshot | null;
   lastRefreshedAt?: string | null;
+  /** Preserve cookie/original track time on hydrate. */
+  trackedAt?: string;
   /** When true, refuse insert if owner is at cap (updates still allowed). */
   enforceCap?: boolean;
 }): TrackedMark | { error: "cap_exceeded"; max: number } {
@@ -235,7 +237,8 @@ export function upsertTrackedMark(input: {
     }
   }
 
-  const trackedAt = existing?.trackedAt ?? new Date().toISOString();
+  const trackedAt =
+    existing?.trackedAt ?? input.trackedAt ?? new Date().toISOString();
   const clientLabel = input.clientLabel ?? existing?.clientLabel ?? "";
   const notes = input.notes ?? existing?.notes ?? "";
   const current =

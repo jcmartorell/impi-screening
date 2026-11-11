@@ -108,6 +108,7 @@ En modo `live`/`auto`, fallos del portal se muestran (502 + inbox) — **nunca**
 
 - Con `CURSOR_APP_ID`: identidad Cursor obligatoria.
 - Sin `CURSOR_APP_ID` (p. ej. Vercel anónimo): simulación UI; en **live** la cartera arranca **vacía** (sin banners de “modo muestra / catálogo mock”).
+- En Vercel la cartera se persiste en cookie HttpOnly `impi_portfolio_v1` (+ localStorage de respaldo). SQLite en `/tmp` es solo caché por instancia.
 
 ## Worker Playwright
 
