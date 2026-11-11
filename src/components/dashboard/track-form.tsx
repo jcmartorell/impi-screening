@@ -39,7 +39,7 @@ export function TrackForm() {
       if (!res.ok) {
         setError(
           data.error ??
-            "No se pudo consultar el portal Marcanet/SIGA (sin fallback mock).",
+            "No se pudo consultar SIGA TuGaceta (sin fallback mock).",
         );
         router.refresh();
         return;
@@ -51,13 +51,16 @@ export function TrackForm() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+    <form
+      onSubmit={onSubmit}
+      className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+    >
       <div className="grid gap-1.5">
         <Label htmlFor="expediente">Expediente (7 dígitos)</Label>
         <Input
           id="expediente"
           inputMode="numeric"
-          placeholder="2451893"
+          placeholder="1240512"
           value={expediente}
           onChange={(e) => setExpediente(e.target.value)}
           maxLength={8}
@@ -73,8 +76,8 @@ export function TrackForm() {
           onChange={(e) => setClientLabel(e.target.value)}
         />
       </div>
-      <Button type="submit" disabled={pending} className="sm:mb-0.5">
-        {pending ? "Registrando…" : "Dar de alta"}
+      <Button type="submit" disabled={pending} variant="outline" className="sm:mb-0.5">
+        {pending ? "Agregando…" : "Seguir expediente"}
       </Button>
       {error ? (
         <p className="text-sm text-destructive sm:col-span-3" role="alert">

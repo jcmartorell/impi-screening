@@ -59,8 +59,8 @@ export default async function HomePage() {
           className="animate-rise rounded-lg border border-[color:var(--ink)]/15 bg-white/70 px-4 py-3 text-sm text-[color:var(--ink-soft)]"
         >
           Vista sin identidad Cursor verificada (simulación UI). La cartera
-          empieza vacía; búsqueda y altas usan datos live de SIGA TuGaceta —
-          sin catálogo mock.
+          empieza vacía; la búsqueda usa datos live de SIGA TuGaceta — sin
+          catálogo mock.
         </div>
       ) : null}
 
@@ -74,8 +74,8 @@ export default async function HomePage() {
             IMPI
           </h1>
           <p className="mt-3 max-w-xl text-base leading-relaxed text-[color:var(--ink-soft)]/90 sm:text-lg">
-            Búsqueda en gacetas SIGA, alta por expediente y seguimiento de
-            movimientos — con export CSV/JSON e inbox de cambios.
+            Busca en gacetas SIGA, exporta resultados y opcionalmente sigue
+            expedientes — con inbox de cambios.
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             Sesión: {viewer.name || "usuario"}
@@ -125,26 +125,31 @@ export default async function HomePage() {
         <SearchPanel liveMode={liveMode} />
       </section>
 
-      <section className="animate-rise-delay rounded-xl border border-[color:var(--ink)]/10 bg-white/60 p-4 sm:p-5">
-        <h2 className="mb-3 font-[family-name:var(--font-display)] text-xl text-[color:var(--ink)]">
-          Alta de expediente
-        </h2>
-        <TrackForm />
-      </section>
-
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
-        <section className="min-w-0">
-          <div className="mb-3 flex items-end justify-between gap-3">
-            <h2 className="font-[family-name:var(--font-display)] text-2xl text-[color:var(--ink)]">
-              Cartera
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              {liveMode
-                ? "Vacía hasta que busques o des de alta un expediente"
-                : "Estatus actual · último movimiento · vigencia"}
-            </p>
+        <section className="min-w-0 space-y-6">
+          <div>
+            <div className="mb-3 flex items-end justify-between gap-3">
+              <h2 className="font-[family-name:var(--font-display)] text-2xl text-[color:var(--ink)]">
+                Cartera
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                {liveMode
+                  ? "Vacía hasta que busques y sigas un expediente"
+                  : "Estatus actual · último movimiento · vigencia"}
+              </p>
+            </div>
+            <MarksTable marks={marks} />
           </div>
-          <MarksTable marks={marks} />
+          <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
+            <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
+              Seguir por expediente
+            </h2>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Opcional: si ya conoces el número de 7 dígitos, añádelo a
+              seguimiento sin pasar por búsqueda.
+            </p>
+            <TrackForm />
+          </div>
         </section>
 
         <aside className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">

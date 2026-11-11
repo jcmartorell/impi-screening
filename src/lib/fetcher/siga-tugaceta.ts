@@ -274,6 +274,56 @@ type ApiEnvelope<T> = {
   errors?: unknown;
 };
 
+function parsePublicationSortKey(date: string | null | undefined): number {
+  if (!date) return 0;
+  const m = String(date).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) return Number(`${m[3]}${m[2]}${m[1]}`);
+  const iso = String(date).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return Number(`${iso[1]}${iso[2]}${iso[3]}`);
+  return 0;
+}
+
+async function resolveGacetasForArea(
+  idArea: string,
+  explicit?: number[],
+): Promise<number[]> {
+  if (explicit?.length) return explicit;
+  if (idArea === MARCA_AREA_ID) return [...DEFAULT_MARCA_GACETAS];
+  try {
+    const jar = await obtainSigaSession();
+    const res = await sigaFetch("/api/Gacetas/getAllGacetas", {
+      method: "POST",
+      jar,
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      timeoutMs: 15_000,
+    });
+    const envelope = res.json as ApiEnvelope<
+      { idGaceta: number; idArea: number }[]
+    >;
+    const all = Array.isArray(envelope?.data) ? envelope.data : [];
+    const ids = all
+      .filter((g) => String(g.idArea) === String(idArea))
+      .map((g) => g.idGaceta);
+    if (ids.length) return ids;
+  } catch {
+    /* fall through */
+  }
+  return [...DEFAULT_MARCA_GACETAS];
+}
+
+function isCaptchaFailure(status: number, body: string, json: unknown): boolean {
+  const msg =
+    typeof json === "object" && json && "message" in json
+      ? String((json as { message?: string }).message ?? "")
+      : "";
+  return (
+    /captcha|recaptcha/i.test(msg) ||
+    /captcha|recaptcha/i.test(body) ||
+    (status >= 400 && /captcha|recaptcha/i.test(body + msg))
+  );
+}
+
 export async function searchFichas(
   filters: SearchFilters,
   options?: { jar?: CookieJar; captchaToken?: string },
@@ -283,31 +333,32 @@ export async function searchFichas(
     return { hits: [], rawCount: 0, blocked: "Indica una palabra o expediente." };
   }
 
-  const jar = options?.jar ?? (await obtainSigaSession());
-  const captcha = options?.captchaToken ?? (await resolveCaptchaToken());
+  let jar = options?.jar ?? (await obtainSigaSession());
+  let captcha = options?.captchaToken ?? (await resolveCaptchaToken());
   const idArea = String(filters.idArea ?? MARCA_AREA_ID);
-  const idGaceta = filters.idGaceta?.length
-    ? filters.idGaceta
-    : [...DEFAULT_MARCA_GACETAS];
+  const idGaceta = await resolveGacetasForArea(idArea, filters.idGaceta);
 
-  const body = {
+  const bodyBase = {
     busqueda: keyword,
     idArea,
     idGaceta,
     fechaDesde: toDdMmYyyy(filters.dateFrom),
     fechaHasta: toDdMmYyyy(filters.dateTo),
-    reCaptchaToken: captcha,
   };
 
-  let res: { status: number; body: string; json: unknown };
-  try {
-    res = await sigaFetch("/api/BusquedaFicha/GetFichas", {
+  async function postOnce(token: string) {
+    return sigaFetch("/api/BusquedaFicha/GetFichas", {
       method: "POST",
       jar,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...bodyBase, reCaptchaToken: token }),
       timeoutMs: 45_000,
     });
+  }
+
+  let res: { status: number; body: string; json: unknown };
+  try {
+    res = await postOnce(captcha);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/abort|timeout/i.test(message)) {
@@ -318,6 +369,35 @@ export async function searchFichas(
       };
     }
     throw error;
+  }
+
+  // One honest retry: fresh CSRF + Playwright token when captcha rejected.
+  if (
+    isCaptchaFailure(res.status, res.body, res.json) ||
+    (typeof res.json === "object" &&
+      res.json &&
+      (res.json as ApiEnvelope<unknown>).successed === false &&
+      /captcha|recaptcha/i.test(
+        String((res.json as ApiEnvelope<unknown>).message ?? ""),
+      ))
+  ) {
+    try {
+      jar = await obtainSigaSession();
+      const pw =
+        process.env.IMPI_USE_PLAYWRIGHT === "1"
+          ? await obtainRecaptchaToken("inicioPage")
+          : null;
+      if (pw) {
+        captcha = pw;
+        res = await postOnce(captcha);
+      } else if (!options?.captchaToken) {
+        // Still retry once with fresh CSRF + placeholder (sometimes enough).
+        captcha = await resolveCaptchaToken();
+        res = await postOnce(captcha);
+      }
+    } catch {
+      /* keep original res */
+    }
   }
 
   if (res.status === 429) {
@@ -334,12 +414,12 @@ export async function searchFichas(
       "message" in (res.json as object)
         ? String((res.json as { message?: string }).message)
         : res.body.slice(0, 180);
-    if (/captcha|recaptcha/i.test(msg) || /captcha|recaptcha/i.test(res.body)) {
+    if (isCaptchaFailure(res.status, res.body, res.json)) {
       return {
         hits: [],
         rawCount: 0,
         blocked:
-          "SIGA exige reCAPTCHA válido. En Vercel no se puede resolver captcha server-side; usa modo worker local (IMPI_USE_PLAYWRIGHT=1) o aporta IMPI_RECAPTCHA_TOKEN.",
+          "SIGA exige reCAPTCHA válido. En Vercel no se puede resolver captcha server-side; usa worker local (IMPI_USE_PLAYWRIGHT=1 / npm run siga:worker) o IMPI_RECAPTCHA_TOKEN.",
       };
     }
     if (/csrf/i.test(msg)) {
@@ -384,6 +464,12 @@ export async function searchFichas(
       return classFilter.some((c) => classes.includes(c));
     });
   }
+
+  hits.sort(
+    (a, b) =>
+      parsePublicationSortKey(b.publicationDate) -
+      parsePublicationSortKey(a.publicationDate),
+  );
 
   const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
   return { hits: hits.slice(0, limit), rawCount: rows.length };
@@ -444,34 +530,45 @@ export async function fetchSnapshotByExpediente(
   const exact = hits.filter(
     (h) => (h.expediente ?? "").replace(/\D/g, "") === digits,
   );
-  const pool = exact.length ? exact : hits;
+  const pool = (exact.length ? exact : hits).slice().sort(
+    (a, b) =>
+      parsePublicationSortKey(b.publicationDate) -
+      parsePublicationSortKey(a.publicationDate),
+  );
   if (!pool.length) {
     throw new Error(
       `TuGaceta: sin fichas para expediente ${digits} (CSRF ok; sin resultados).`,
     );
   }
 
-  // Prefer detalle when available
+  // Prefer most recent publicación, then detalle when available.
   const best = pool[0]!;
-  const detail = await fetchFichaInfo(best.fichaId, {
-    jar,
-    captchaToken: captcha,
-  });
+  let detail: SearchHit | null = null;
+  try {
+    detail = await fetchFichaInfo(best.fichaId, {
+      jar,
+      captchaToken: captcha,
+    });
+  } catch {
+    detail = null;
+  }
   const hit = detail ?? best;
   const snapshot = searchHitToSnapshot(hit);
   // Keep requested expediente digits (pad to 7 when modern)
-  snapshot.expediente = digits.length >= 7 ? digits.slice(0, 7) : digits.padStart(7, "0");
+  snapshot.expediente =
+    digits.length >= 7 ? digits.slice(0, 7) : digits.padStart(7, "0");
   snapshot.source = "live";
   return snapshot;
 }
 
-export async function listGacetasMarcas(): Promise<
-  { idGaceta: number; nombre: string; idArea: number }[]
-> {
-  const jar = await obtainSigaSession();
+export async function listGacetasForArea(
+  idArea: number,
+  jar?: CookieJar,
+): Promise<{ idGaceta: number; nombre: string; idArea: number }[]> {
+  const session = jar ?? (await obtainSigaSession());
   const res = await sigaFetch("/api/Gacetas/getAllGacetas", {
     method: "POST",
-    jar,
+    jar: session,
     headers: { "Content-Type": "application/json" },
     body: "{}",
     timeoutMs: 15_000,
@@ -480,5 +577,11 @@ export async function listGacetasMarcas(): Promise<
     { idGaceta: number; nombre: string; idArea: number }[]
   >;
   const all = Array.isArray(envelope?.data) ? envelope.data : [];
-  return all.filter((g) => g.idArea === 2);
+  return all.filter((g) => g.idArea === idArea);
+}
+
+export async function listGacetasMarcas(): Promise<
+  { idGaceta: number; nombre: string; idArea: number }[]
+> {
+  return listGacetasForArea(2);
 }

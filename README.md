@@ -1,13 +1,13 @@
 # IMPI — Monitor de marcas
 
-Herramienta para prácticas de PI en México: **búsqueda en gacetas SIGA**, alta por expediente, seguimiento post-concesión (declaración de uso, requerimientos, oficios, caducidad), export CSV/JSON e inbox de cambios.
+Herramienta para prácticas de PI en México: **búsqueda en gacetas SIGA** (flujo principal), export CSV/JSON y seguimiento opcional de expedientes post-concesión (declaración de uso, requerimientos, oficios, caducidad) con inbox de cambios.
 
 Este Project reemplaza el stub vacío de [impi-screening](https://github.com/jcmartorell/impi-screening). El producto vive aquí: dashboard Next.js + API + fetcher SIGA TuGaceta.
 
 ## Qué incluye
 
-- **Búsqueda & descarga**: filtros por palabra/nombre, clase Niza, rango de fechas; selección múltiple; export CSV/JSON
-- Dashboard: alta/listado de marcas, estatus, último movimiento, notificaciones in-app
+- **Búsqueda**: filtros por palabra/nombre, fechas, sector y clase Niza; selección múltiple; export CSV/JSON; seguir seleccionados
+- Cartera de seguimiento (opcional) con estatus, último movimiento e inbox
 - API HTTP para search, export, estatus, vencimientos y refresh
 - Fetcher **live** vía SIGA TuGaceta (`https://siga.impi.gob.mx:5007`) con sesión CSRF
 - Catálogo mock **solo** si `IMPI_FETCH_MODE=mock`
@@ -44,18 +44,18 @@ En Vercel, `vercel.json` fija `IMPI_FETCH_MODE=live`.
 
 ## Cómo usar búsqueda / export
 
-1. Abre el dashboard → sección **Búsqueda y descarga**.
-2. Ingresa palabra, nombre de marca o expediente; opcionalmente clase Niza y fechas.
+1. Abre el dashboard → sección **Búsqueda** (CTA principal).
+2. Ingresa palabra, nombre de marca o expediente; opcionalmente sector, clase Niza y fechas.
 3. Pulsa **Buscar en SIGA**. Verás estatus/sección, clase, gaceta y fechas por hit.
-4. Marca varios resultados → **Exportar CSV** o **Exportar JSON**.
-5. Para monitoreo continuo, copia un expediente de 7 dígitos a **Alta de expediente**.
+4. Marca varios resultados → **Exportar CSV** / **Exportar JSON**, o **Seguir seleccionados**.
+5. Opcional: si ya conoces el número, usa **Seguir por expediente**.
 
 API equivalente:
 
 ```bash
 curl -X POST http://127.0.0.1:3847/api/search \
   -H 'content-type: application/json' \
-  -d '{"keyword":"SOLARIS","classNice":"9","dateFrom":"2020-01-01","limit":50}'
+  -d '{"keyword":"SOLARIS","classNice":"9","sector":"marcas","dateFrom":"2020-01-01","limit":50}'
 
 curl -X POST http://127.0.0.1:3847/api/export \
   -H 'content-type: application/json' \
@@ -85,7 +85,7 @@ En modo `live`/`auto`, fallos del portal se muestran (502 + inbox) — **nunca**
 | `GET/POST` | `/api/search` | Búsqueda TuGaceta (keyword, clase, fechas, sector) |
 | `POST` | `/api/export` | `{ format: "csv"\|"json", hits: [...] }` descarga |
 | `GET` | `/api/marks` | Lista marcas en seguimiento |
-| `POST` | `/api/marks` | Alta `{ "expediente": "2451893", "clientLabel?" }` |
+| `POST` | `/api/marks` | Seguir `{ "expediente": "1240512", "clientLabel?" }` |
 | `GET` | `/api/marks/:expediente` | Estatus (+ `?refresh=1`) |
 | `GET` | `/api/marks/expiring?days=90` | Marcas que vencen en N días |
 | `GET` | `/api/notifications` | Inbox |
@@ -102,5 +102,6 @@ En modo `live`/`auto`, fallos del portal se muestran (502 + inbox) — **nunca**
 npm i -D playwright
 npx playwright install chromium
 IMPI_USE_PLAYWRIGHT=1 npm run siga:worker -- search --keyword SOLARIS --class 9
+IMPI_USE_PLAYWRIGHT=1 npm run siga:worker -- expediente 1240512
 IMPI_USE_PLAYWRIGHT=1 npm run siga:token
 ```

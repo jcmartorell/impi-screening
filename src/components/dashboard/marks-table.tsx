@@ -30,8 +30,8 @@ export function MarksTable({ marks }: { marks: TrackedMark[] }) {
           Sin expedientes en seguimiento
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Usa la búsqueda SIGA o da de alta un expediente de 7 dígitos. En modo
-          live la cartera no se rellena con datos de muestra.
+          Usa la búsqueda SIGA (flujo principal) o sigue un expediente de 7
+          dígitos. En modo live la cartera no se rellena con datos de muestra.
         </p>
       </div>
     );
