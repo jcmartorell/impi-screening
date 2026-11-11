@@ -35,16 +35,35 @@ export function getFetchMode(): FetchMode {
   return isProductionRuntime() ? "live" : "auto";
 }
 
-function looksBlocked(body: string, status: number): boolean {
-  if (status === 403 || status === 429 || status === 503) return true;
+function classifyPortalFailure(
+  body: string,
+  status: number,
+): "forbidden" | "rate_limit" | "captcha" | "challenge" | null {
+  if (status === 429) return "rate_limit";
+  if (status === 403) return "forbidden";
+  if (status === 503) return "forbidden";
   const lower = body.toLowerCase();
-  return (
-    lower.includes("captcha") ||
-    lower.includes("cloudflare") ||
-    lower.includes("access denied") ||
+  // Challenge / interstitial pages (not a mere recaptcha.js include on an SPA shell).
+  if (
     lower.includes("just a moment") ||
-    (body.length < 80 && status >= 400)
-  );
+    lower.includes("cf-challenge") ||
+    lower.includes("access denied") ||
+    lower.includes("attention required") ||
+    (lower.includes("cloudflare") && lower.includes("challenge"))
+  ) {
+    return "challenge";
+  }
+  if (
+    lower.includes("g-recaptcha") ||
+    lower.includes("hcaptcha") ||
+    /recaptcha\/api\.js\?render=/.test(lower) ||
+    (lower.includes("captcha") &&
+      (lower.includes("verify") || lower.includes("challenge")))
+  ) {
+    return "captcha";
+  }
+  if (body.length < 80 && status >= 400) return "forbidden";
+  return null;
 }
 
 async function fetchWithTimeout(
@@ -80,17 +99,37 @@ async function tryLiveFetch(expediente: string): Promise<TrademarkSnapshot> {
     try {
       const result = await withExponentialBackoff(async () => {
         const response = await fetchWithTimeout(url);
-        if (looksBlocked(response.body, response.status)) {
+        const block = classifyPortalFailure(response.body, response.status);
+        if (block === "rate_limit") {
+          throw new Error(`Portal rate-limited (429) for ${url}`);
+        }
+        if (block === "forbidden") {
           throw new Error(
-            `Portal blocked or rate-limited (${response.status}) for ${url}`,
+            `Portal forbidden/unavailable (${response.status}) for ${url}`,
+          );
+        }
+        if (block === "challenge") {
+          throw new Error(
+            `Portal challenge/Cloudflare interstitial (${response.status}) for ${url}`,
           );
         }
         if (response.status >= 400) {
           throw new Error(`HTTP ${response.status} from ${url}`);
         }
-        const parsed = parsePublicHtml(expediente, response.body, response.contentType);
+        const parsed = parsePublicHtml(
+          expediente,
+          response.body,
+          response.contentType,
+        );
         if (!parsed) {
-          throw new Error(`Unable to parse public response from ${url}`);
+          if (block === "captcha") {
+            throw new Error(
+              `Portal captcha / no parseable expediente payload (${response.status}) for ${url}`,
+            );
+          }
+          throw new Error(
+            `Unable to parse public response (${response.status}, ${response.contentType || "unknown-type"}) from ${url}`,
+          );
         }
         return { ...parsed, source: "live" as const };
       });
