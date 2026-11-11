@@ -86,13 +86,26 @@ export function DailyScanSettings({
         newForEmail?: number;
         emailed?: boolean;
         emailMode?: string;
+        capped?: boolean;
+        sample?: {
+          expediente: string;
+          markName: string;
+          expiryDate: string;
+          daysLeft: number;
+        } | null;
       };
       if (!res.ok || data.ok === false) {
         setError(data.error ?? "Escaneo falló.");
         return;
       }
+      const sampleTxt = data.sample
+        ? ` · ej. ${data.sample.expediente} (${data.sample.daysLeft}d)`
+        : "";
+      const cappedTxt = data.capped ? " · TuGaceta tope 1000/gaceta" : "";
       setRunMsg(
         `Listo: ${data.nearExpiry ?? 0} ≤${config.daysWindow}d de ${data.rawHits ?? 0} hits` +
+          sampleTxt +
+          cappedTxt +
           (data.emailed
             ? ` · email (${data.emailMode ?? "ok"}) ${data.newForEmail ?? 0} nuevos`
             : data.newForEmail
@@ -212,12 +225,15 @@ export function DailyScanSettings({
             id="scan-limit"
             type="number"
             min={1}
-            max={200}
+            max={12000}
             value={config.limitPerKeyword}
             onChange={(e) =>
-              patch("limitPerKeyword", Number(e.target.value) || 80)
+              patch("limitPerKeyword", Number(e.target.value) || 8000)
             }
           />
+          <p className="text-xs text-muted-foreground">
+            Paginación por gaceta (tope TuGaceta ≈1000/consulta). Default 8000.
+          </p>
         </div>
       </div>
 

@@ -14,7 +14,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function hydrateAll(ownerKey: string, request: Request) {
   hydratePortfolioForRequest(ownerKey, request);
@@ -68,6 +68,8 @@ export async function POST(request: Request) {
       newForEmail: result.newForEmail,
       emailed: result.emailed,
       emailMode: result.emailMode,
+      capped: result.capped,
+      sample: result.sample,
       error: result.error,
       hits: result.hits,
       lastRunAt: getOwnerSettings(viewer.ownerKey).dailyScanLastRunAt,

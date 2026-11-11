@@ -10,9 +10,15 @@
  * `IMPI_USE_PLAYWRIGHT=1` (local/worker only — not viable on Vercel serverless).
  */
 
+import { sleep } from "@/lib/fetcher/backoff";
 import { normalizeStatus } from "@/lib/parser";
 import { STATUS_LABELS } from "@/lib/types";
 import type { TrademarkSnapshot } from "@/lib/types";
+
+/** TuGaceta GetFichas hard-caps ~1000 rows per request (page params ignored). */
+export const TUGACETA_PAGE_CAP = 1000;
+/** Max hits retained for exhaust/daily-scan mode. */
+export const TUGACETA_MAX_HITS = 12_000;
 
 export const SIGA_API_BASE =
   process.env.IMPI_SIGA_API_BASE?.trim() || "https://siga.impi.gob.mx:5007";
@@ -64,6 +70,11 @@ export type SearchFilters = {
   /** Gaceta ids; default marca set. */
   idGaceta?: number[];
   limit?: number;
+  /**
+   * Page through all gacetas (and date chunks when a gaceta hits the 1000-row
+   * TuGaceta cap). Default: on when limit > 500.
+   */
+  exhaustPages?: boolean;
 };
 
 type CookieJar = Map<string, string>;
@@ -208,15 +219,49 @@ function pick(map: Record<string, string>, keys: string[]): string | null {
   return null;
 }
 
+/** Spanish month names → 01-12 (TuGaceta “Renovada Hasta” uses these). */
+const ES_MONTHS: Record<string, string> = {
+  enero: "01",
+  febrero: "02",
+  marzo: "03",
+  abril: "04",
+  mayo: "05",
+  junio: "06",
+  julio: "07",
+  agosto: "08",
+  septiembre: "09",
+  setiembre: "09",
+  octubre: "10",
+  noviembre: "11",
+  diciembre: "12",
+};
+
 /** Normalize TuGaceta date strings to yyyy-MM-dd when possible. */
 export function toIsoDate(value: string | null | undefined): string | null {
   if (!value) return null;
-  const s = String(value).trim();
+  const s = String(value).trim().replace(/\s+/g, " ");
   if (!s) return null;
   const dmY = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (dmY) return `${dmY[3]}-${dmY[2]}-${dmY[1]}`;
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  // "31 DE ENERO DE 2027" / "15 DE AGOSTO DE 2026" (Renovada Hasta)
+  const esLong = s.match(
+    /^(\d{1,2})\s+DE\s+([A-Za-zÁÉÍÓÚáéíóúÜü]+)\s+DE\s+(\d{4})$/i,
+  );
+  if (esLong) {
+    const month =
+      ES_MONTHS[
+        esLong[2]!
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+      ];
+    if (month) {
+      const day = esLong[1]!.padStart(2, "0");
+      return `${esLong[3]}-${month}-${day}`;
+    }
+  }
   const parsed = Date.parse(s);
   if (!Number.isFinite(parsed)) return null;
   return new Date(parsed).toISOString().slice(0, 10);
@@ -247,6 +292,8 @@ export function inferExpiryDateFromDatos(
 ): string | null {
   const explicit = toIsoDate(
     pick(raw, [
+      "Renovada Hasta",
+      "Renovada hasta",
       "Vigencia",
       "Fecha de vigencia",
       "Fecha de Vigencia",
@@ -407,26 +454,54 @@ function isCaptchaFailure(status: number, body: string, json: unknown): boolean 
   );
 }
 
-export async function searchFichas(
-  filters: SearchFilters,
-  options?: { jar?: CookieJar; captchaToken?: string },
-): Promise<{ hits: SearchHit[]; blocked?: string; rawCount: number }> {
-  const keyword = filters.keyword.trim();
-  if (!keyword) {
-    return { hits: [], rawCount: 0, blocked: "Indica una palabra o expediente." };
+type GetFichasResult =
+  | { ok: true; rows: SigaFichaHit[] }
+  | { ok: false; blocked: string };
+
+/** Default year windows used when a single gaceta hits the 1000-row cap. */
+function defaultDateChunks(
+  dateFrom?: string,
+  dateTo?: string,
+): { from: string; to: string }[] {
+  const fromYear = (() => {
+    const m = (dateFrom ?? "").match(/^(\d{4})/);
+    return m ? Number(m[1]) : 2010;
+  })();
+  const toYear = (() => {
+    const m = (dateTo ?? "").match(/^(\d{4})/);
+    return m ? Number(m[1]) : new Date().getUTCFullYear();
+  })();
+  const chunks: { from: string; to: string }[] = [];
+  for (let y = fromYear; y <= toYear; y++) {
+    chunks.push({
+      from: dateFrom && y === fromYear ? dateFrom : `${y}-01-01`,
+      to: dateTo && y === toYear ? dateTo : `${y}-12-31`,
+    });
   }
+  return chunks.length ? chunks : [{ from: dateFrom ?? "", to: dateTo ?? "" }];
+}
 
-  let jar = options?.jar ?? (await obtainSigaSession());
-  let captcha = options?.captchaToken ?? (await resolveCaptchaToken());
-  const idArea = String(filters.idArea ?? MARCA_AREA_ID);
-  const idGaceta = await resolveGacetasForArea(idArea, filters.idGaceta);
-
+async function postGetFichas(args: {
+  jar: CookieJar;
+  captcha: string;
+  keyword: string;
+  idArea: string;
+  idGaceta: number[];
+  dateFrom?: string;
+  dateTo?: string;
+  allowCaptchaRetry?: boolean;
+}): Promise<{
+  jar: CookieJar;
+  captcha: string;
+  result: GetFichasResult;
+}> {
+  let { jar, captcha } = args;
   const bodyBase = {
-    busqueda: keyword,
-    idArea,
-    idGaceta,
-    fechaDesde: toDdMmYyyy(filters.dateFrom),
-    fechaHasta: toDdMmYyyy(filters.dateTo),
+    busqueda: args.keyword,
+    idArea: args.idArea,
+    idGaceta: args.idGaceta,
+    fechaDesde: toDdMmYyyy(args.dateFrom),
+    fechaHasta: toDdMmYyyy(args.dateTo),
   };
 
   async function postOnce(token: string) {
@@ -446,23 +521,26 @@ export async function searchFichas(
     const message = error instanceof Error ? error.message : String(error);
     if (/abort|timeout/i.test(message)) {
       return {
-        hits: [],
-        rawCount: 0,
-        blocked: `Timeout consultando SIGA TuGaceta (${SIGA_API_BASE}).`,
+        jar,
+        captcha,
+        result: {
+          ok: false,
+          blocked: `Timeout consultando SIGA TuGaceta (${SIGA_API_BASE}).`,
+        },
       };
     }
     throw error;
   }
 
-  // One honest retry: fresh CSRF + Playwright token when captcha rejected.
   if (
-    isCaptchaFailure(res.status, res.body, res.json) ||
-    (typeof res.json === "object" &&
-      res.json &&
-      (res.json as ApiEnvelope<unknown>).successed === false &&
-      /captcha|recaptcha/i.test(
-        String((res.json as ApiEnvelope<unknown>).message ?? ""),
-      ))
+    args.allowCaptchaRetry !== false &&
+    (isCaptchaFailure(res.status, res.body, res.json) ||
+      (typeof res.json === "object" &&
+        res.json &&
+        (res.json as ApiEnvelope<unknown>).successed === false &&
+        /captcha|recaptcha/i.test(
+          String((res.json as ApiEnvelope<unknown>).message ?? ""),
+        )))
   ) {
     try {
       jar = await obtainSigaSession();
@@ -470,14 +548,8 @@ export async function searchFichas(
         process.env.IMPI_USE_PLAYWRIGHT === "1"
           ? await obtainRecaptchaToken("inicioPage")
           : null;
-      if (pw) {
-        captcha = pw;
-        res = await postOnce(captcha);
-      } else if (!options?.captchaToken) {
-        // Still retry once with fresh CSRF + placeholder (sometimes enough).
-        captcha = await resolveCaptchaToken();
-        res = await postOnce(captcha);
-      }
+      captcha = pw ?? (await resolveCaptchaToken());
+      res = await postOnce(captcha);
     } catch {
       /* keep original res */
     }
@@ -485,9 +557,12 @@ export async function searchFichas(
 
   if (res.status === 429) {
     return {
-      hits: [],
-      rawCount: 0,
-      blocked: "SIGA rate-limit (429). Espera ~1 minuto.",
+      jar,
+      captcha,
+      result: {
+        ok: false,
+        blocked: "SIGA rate-limit (429). Espera ~1 minuto.",
+      },
     };
   }
   if (res.status >= 400) {
@@ -499,23 +574,29 @@ export async function searchFichas(
         : res.body.slice(0, 180);
     if (isCaptchaFailure(res.status, res.body, res.json)) {
       return {
-        hits: [],
-        rawCount: 0,
-        blocked:
-          "SIGA exige reCAPTCHA válido. En Vercel no se puede resolver captcha server-side; usa worker local (IMPI_USE_PLAYWRIGHT=1 / npm run siga:worker) o IMPI_RECAPTCHA_TOKEN.",
+        jar,
+        captcha,
+        result: {
+          ok: false,
+          blocked:
+            "SIGA exige reCAPTCHA válido. En Vercel no se puede resolver captcha server-side; usa worker local (IMPI_USE_PLAYWRIGHT=1 / npm run siga:worker) o IMPI_RECAPTCHA_TOKEN.",
+        },
       };
     }
     if (/csrf/i.test(msg)) {
       return {
-        hits: [],
-        rawCount: 0,
-        blocked: `SIGA CSRF rechazado (${res.status}).`,
+        jar,
+        captcha,
+        result: { ok: false, blocked: `SIGA CSRF rechazado (${res.status}).` },
       };
     }
     return {
-      hits: [],
-      rawCount: 0,
-      blocked: `SIGA GetFichas falló (${res.status}): ${msg}`,
+      jar,
+      captcha,
+      result: {
+        ok: false,
+        blocked: `SIGA GetFichas falló (${res.status}): ${msg}`,
+      },
     };
   }
 
@@ -524,17 +605,169 @@ export async function searchFichas(
     const msg = String(envelope.message ?? "error");
     if (/captcha|recaptcha/i.test(msg)) {
       return {
-        hits: [],
-        rawCount: 0,
-        blocked:
-          "SIGA respondió error de captcha. Activa worker Playwright (IMPI_USE_PLAYWRIGHT=1) fuera de Vercel.",
+        jar,
+        captcha,
+        result: {
+          ok: false,
+          blocked:
+            "SIGA respondió error de captcha. Activa worker Playwright (IMPI_USE_PLAYWRIGHT=1) fuera de Vercel.",
+        },
       };
     }
-    return { hits: [], rawCount: 0, blocked: `SIGA: ${msg}` };
+    return { jar, captcha, result: { ok: false, blocked: `SIGA: ${msg}` } };
   }
 
   const rows = Array.isArray(envelope?.data) ? envelope!.data! : [];
-  let hits = rows.map((r) => mapFichaToSearchHit(r, "live"));
+  return { jar, captcha, result: { ok: true, rows } };
+}
+
+export async function searchFichas(
+  filters: SearchFilters,
+  options?: {
+    jar?: CookieJar;
+    captchaToken?: string;
+    /** Skip top-hit GetFichaInfo enrichment (daily scan does its own). */
+    skipListEnrichment?: boolean;
+  },
+): Promise<{
+  hits: SearchHit[];
+  blocked?: string;
+  rawCount: number;
+  capped?: boolean;
+}> {
+  const keyword = filters.keyword.trim();
+  if (!keyword) {
+    return { hits: [], rawCount: 0, blocked: "Indica una palabra o expediente." };
+  }
+
+  let jar = options?.jar ?? (await obtainSigaSession());
+  let captcha = options?.captchaToken ?? (await resolveCaptchaToken());
+  const idArea = String(filters.idArea ?? MARCA_AREA_ID);
+  const idGaceta = await resolveGacetasForArea(idArea, filters.idGaceta);
+
+  const limit = Math.min(
+    Math.max(filters.limit ?? 100, 1),
+    TUGACETA_MAX_HITS,
+  );
+  const exhaust =
+    filters.exhaustPages === true ||
+    (filters.exhaustPages !== false && limit > 500);
+
+  const byFicha = new Map<number, SigaFichaHit>();
+  let rawCount = 0;
+  let capped = false;
+  let callIndex = 0;
+
+  async function fetchBatch(
+    gacetas: number[],
+    dateFrom?: string,
+    dateTo?: string,
+    allowCaptchaRetry = true,
+  ): Promise<GetFichasResult> {
+    if (callIndex > 0) {
+      // Gentle backoff between TuGaceta pages (rate-limit friendly).
+      await sleep(250 + Math.floor(Math.random() * 200));
+    }
+    callIndex += 1;
+    const posted = await postGetFichas({
+      jar,
+      captcha,
+      keyword,
+      idArea,
+      idGaceta: gacetas,
+      dateFrom,
+      dateTo,
+      allowCaptchaRetry,
+    });
+    jar = posted.jar;
+    captcha = posted.captcha;
+
+    if (!posted.result.ok && /rate-limit \(429\)/i.test(posted.result.blocked)) {
+      await sleep(1_200 + Math.floor(Math.random() * 800));
+      const retry = await postGetFichas({
+        jar,
+        captcha,
+        keyword,
+        idArea,
+        idGaceta: gacetas,
+        dateFrom,
+        dateTo,
+        allowCaptchaRetry: false,
+      });
+      jar = retry.jar;
+      captcha = retry.captcha;
+      return retry.result;
+    }
+    return posted.result;
+  }
+
+  function ingest(rows: SigaFichaHit[]) {
+    rawCount += rows.length;
+    for (const row of rows) {
+      if (byFicha.size >= limit) break;
+      if (!byFicha.has(row.fichaId)) byFicha.set(row.fichaId, row);
+    }
+  }
+
+  if (!exhaust) {
+    const result = await fetchBatch(
+      idGaceta,
+      filters.dateFrom,
+      filters.dateTo,
+    );
+    if (!result.ok) {
+      return { hits: [], rawCount: 0, blocked: result.blocked };
+    }
+    if (result.rows.length >= TUGACETA_PAGE_CAP) capped = true;
+    ingest(result.rows);
+  } else {
+    // Per-gaceta loop — TuGaceta ignores page/offset; each gaceta can return
+    // up to ~1000, so 8 marca gacetas ≈ 8k unique hits for broad keywords.
+    for (const g of idGaceta) {
+      if (byFicha.size >= limit) break;
+      const result = await fetchBatch(
+        [g],
+        filters.dateFrom,
+        filters.dateTo,
+        callIndex === 0,
+      );
+      if (!result.ok) {
+        // Soft-fail a single gaceta; hard-fail only if we have nothing yet.
+        if (!byFicha.size) {
+          return { hits: [], rawCount: 0, blocked: result.blocked };
+        }
+        console.warn(`[siga] GetFichas gaceta ${g}: ${result.blocked}`);
+        continue;
+      }
+
+      if (result.rows.length < TUGACETA_PAGE_CAP) {
+        ingest(result.rows);
+        continue;
+      }
+
+      // Cap hit: split by publication-year windows to pull more rows.
+      capped = true;
+      const chunks = defaultDateChunks(filters.dateFrom, filters.dateTo);
+      if (chunks.length <= 1) {
+        ingest(result.rows);
+        continue;
+      }
+      for (const chunk of chunks) {
+        if (byFicha.size >= limit) break;
+        const chunkRes = await fetchBatch([g], chunk.from, chunk.to, false);
+        if (!chunkRes.ok) {
+          console.warn(
+            `[siga] GetFichas gaceta ${g} chunk ${chunk.from}: ${chunkRes.blocked}`,
+          );
+          continue;
+        }
+        if (chunkRes.rows.length >= TUGACETA_PAGE_CAP) capped = true;
+        ingest(chunkRes.rows);
+      }
+    }
+  }
+
+  let hits = [...byFicha.values()].map((r) => mapFichaToSearchHit(r, "live"));
 
   const classFilter = (filters.classNice ?? "")
     .split(/[,\s]+/)
@@ -563,34 +796,35 @@ export async function searchFichas(
     );
   });
 
-  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
   hits = hits.slice(0, limit);
 
   // Listado GetFichas often omits Denominación/Clase; enrich a few top hits
   // sequentially (shared CSRF jar is not safe for parallel POSTs).
-  const toEnrich = hits
-    .filter((h) => !h.markName || !h.classNice || h.classNice === "—")
-    .slice(0, 6);
-  for (const h of toEnrich) {
-    try {
-      const detail = await fetchFichaInfo(h.fichaId, {
-        jar,
-        captchaToken: captcha,
-      });
-      if (!detail) continue;
-      h.markName = detail.markName ?? h.markName;
-      h.owner = detail.owner ?? h.owner;
-      h.classNice = detail.classNice ?? h.classNice;
-      h.registro = detail.registro ?? h.registro;
-      h.grantDate = detail.grantDate ?? h.grantDate;
-      h.statusLabel = detail.statusLabel ?? h.statusLabel;
-      h.rawDatos = { ...h.rawDatos, ...detail.rawDatos };
-    } catch {
-      /* keep list row */
+  if (!options?.skipListEnrichment) {
+    const toEnrich = hits
+      .filter((h) => !h.markName || !h.classNice || h.classNice === "—")
+      .slice(0, 6);
+    for (const h of toEnrich) {
+      try {
+        const detail = await fetchFichaInfo(h.fichaId, {
+          jar,
+          captchaToken: captcha,
+        });
+        if (!detail) continue;
+        h.markName = detail.markName ?? h.markName;
+        h.owner = detail.owner ?? h.owner;
+        h.classNice = detail.classNice ?? h.classNice;
+        h.registro = detail.registro ?? h.registro;
+        h.grantDate = detail.grantDate ?? h.grantDate;
+        h.statusLabel = detail.statusLabel ?? h.statusLabel;
+        h.rawDatos = { ...h.rawDatos, ...detail.rawDatos };
+      } catch {
+        /* keep list row */
+      }
     }
   }
 
-  return { hits, rawCount: rows.length };
+  return { hits, rawCount: byFicha.size || rawCount, capped };
 }
 
 export async function fetchFichaInfo(

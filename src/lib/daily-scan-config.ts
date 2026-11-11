@@ -17,7 +17,10 @@ export type DailyScanConfig = {
   daysWindow: number;
   /** Send digest email when new near-expiry hits appear. */
   emailDigest: boolean;
-  /** Cap per keyword (TuGaceta). */
+  /**
+   * Cap per keyword. TuGaceta returns ≤1000/request; daily scan pages per
+   * gaceta (and date chunks) up to this limit (~8k for broad marca keywords).
+   */
   limitPerKeyword: number;
 };
 
@@ -30,7 +33,7 @@ export const DEFAULT_DAILY_SCAN_CONFIG: DailyScanConfig = {
   dateTo: "",
   daysWindow: 30,
   emailDigest: true,
-  limitPerKeyword: 80,
+  limitPerKeyword: 8000,
 };
 
 export function sectorToIdArea(sector: DailyScanSector): string {
@@ -66,9 +69,12 @@ export function normalizeDailyScanConfig(
     : base.daysWindow;
 
   const limitRaw = Number(input.limitPerKeyword);
-  const limitPerKeyword = Number.isFinite(limitRaw)
-    ? Math.min(Math.max(Math.floor(limitRaw), 1), 200)
+  // Legacy default was 80 (pre per-gaceta exhaust); upgrade so saved cookies
+  // pick up ~8k capacity without a manual UI edit.
+  let limitPerKeyword = Number.isFinite(limitRaw)
+    ? Math.min(Math.max(Math.floor(limitRaw), 1), 12_000)
     : base.limitPerKeyword;
+  if (limitPerKeyword === 80) limitPerKeyword = 8000;
 
   return {
     enabled: Boolean(input.enabled),

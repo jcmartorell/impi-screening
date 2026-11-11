@@ -4,7 +4,7 @@ import { jsonPrivate } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * Daily TuGaceta scan for configured filters → near-expiry ≤ N days.
@@ -29,6 +29,8 @@ async function handle(request: Request) {
       newForEmail: o.newForEmail,
       emailed: o.emailed,
       emailMode: o.emailMode,
+      capped: o.capped,
+      sample: o.sample,
       error: o.error,
     })),
   };

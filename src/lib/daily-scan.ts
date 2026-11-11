@@ -7,12 +7,12 @@ import { emailDailyExpiryDigest } from "@/lib/email";
 import {
   fetchFichaInfo,
   inferExpiryDateFromDatos,
+  searchFichas,
   searchHitToSnapshot,
   toIsoDate,
   type SearchHit,
 } from "@/lib/fetcher/siga-tugaceta";
 import { resolveAlertEmail } from "@/lib/portfolio-cookie";
-import { runTrademarkSearch } from "@/lib/search";
 import {
   getOwnerSettings,
   listDailyScanHits,
@@ -34,8 +34,16 @@ export type DailyScanOwnerResult = {
   newForEmail: number;
   emailed: boolean;
   emailMode?: string;
+  capped?: boolean;
   error?: string;
   hits: DailyScanHit[];
+  /** Sample near-expiry mark for proof / UI. */
+  sample?: {
+    expediente: string;
+    markName: string;
+    expiryDate: string;
+    daysLeft: number;
+  } | null;
 };
 
 function withinDays(isoDate: string, days: number): boolean {
@@ -46,48 +54,52 @@ function withinDays(isoDate: string, days: number): boolean {
   return t >= now && t <= horizon;
 }
 
-async function enrichExpiry(
+function daysLeftFromIso(isoDate: string): number {
+  return Math.ceil(
+    (Date.parse(isoDate) - Date.now()) / (24 * 60 * 60 * 1000),
+  );
+}
+
+function expiryFromHit(
   hit: SearchHit,
   idArea: string,
-): Promise<{ hit: SearchHit; expiryDate: string | null }> {
-  let working = hit;
-  let expiry = inferExpiryDateFromDatos(hit.rawDatos ?? {}, {
+): string | null {
+  const expiry = inferExpiryDateFromDatos(hit.rawDatos ?? {}, {
     grantDate: hit.grantDate,
     registro: hit.registro,
     idArea,
     statusLabel: hit.statusLabel,
     seccion: hit.seccion,
   });
+  return expiry ? toIsoDate(expiry) ?? expiry : null;
+}
 
-  if (!expiry && hit.fichaId) {
-    try {
-      const detail = await fetchFichaInfo(hit.fichaId);
-      if (detail) {
-        working = {
-          ...hit,
-          markName: detail.markName ?? hit.markName,
-          owner: detail.owner ?? hit.owner,
-          classNice: detail.classNice ?? hit.classNice,
-          grantDate: detail.grantDate ?? hit.grantDate,
-          registro: detail.registro ?? hit.registro,
-          statusLabel: detail.statusLabel ?? hit.statusLabel,
-          seccion: detail.seccion || hit.seccion,
-          rawDatos: { ...hit.rawDatos, ...detail.rawDatos },
-        };
-        expiry = inferExpiryDateFromDatos(working.rawDatos ?? {}, {
-          grantDate: working.grantDate,
-          registro: working.registro,
-          idArea,
-          statusLabel: working.statusLabel,
-          seccion: working.seccion,
-        });
-      }
-    } catch {
-      /* keep list row */
-    }
+/**
+ * Prefer list-row fields (Fecha de Concesión / Renovada Hasta). Only call
+ * GetFichaInfo when near-expiry and we still need a denominación.
+ */
+async function enrichNearExpiryHit(hit: SearchHit): Promise<SearchHit> {
+  if (hit.markName && hit.markName.trim()) {
+    return hit;
   }
-
-  return { hit: working, expiryDate: expiry ? toIsoDate(expiry) ?? expiry : null };
+  if (!hit.fichaId) return hit;
+  try {
+    const detail = await fetchFichaInfo(hit.fichaId);
+    if (!detail) return hit;
+    return {
+      ...hit,
+      markName: detail.markName ?? hit.markName,
+      owner: detail.owner ?? hit.owner,
+      classNice: detail.classNice ?? hit.classNice,
+      grantDate: detail.grantDate ?? hit.grantDate,
+      registro: detail.registro ?? hit.registro,
+      statusLabel: detail.statusLabel ?? hit.statusLabel,
+      seccion: detail.seccion || hit.seccion,
+      rawDatos: { ...hit.rawDatos, ...detail.rawDatos },
+    };
+  } catch {
+    return hit;
+  }
 }
 
 /**
@@ -113,6 +125,7 @@ export async function runDailyExpiryScanForOwner(
       emailed: false,
       error: "Escaneo diario desactivado",
       hits: listDailyScanHits(ownerKey),
+      sample: null,
     };
   }
 
@@ -127,6 +140,7 @@ export async function runDailyExpiryScanForOwner(
       emailed: false,
       error: "Configura al menos una palabra clave / marca",
       hits: listDailyScanHits(ownerKey),
+      sample: null,
     };
   }
 
@@ -148,17 +162,22 @@ export async function runDailyExpiryScanForOwner(
   >();
 
   let rawHits = 0;
+  let anyCapped = false;
   try {
     for (const keyword of keywords) {
-      const result = await runTrademarkSearch({
-        keyword,
-        classNice: config.classNice || undefined,
-        dateFrom: config.dateFrom || undefined,
-        dateTo: config.dateTo || undefined,
-        idArea,
-        limit: config.limitPerKeyword,
-      });
-      if (!result.ok) {
+      const result = await searchFichas(
+        {
+          keyword,
+          classNice: config.classNice || undefined,
+          dateFrom: config.dateFrom || undefined,
+          dateTo: config.dateTo || undefined,
+          idArea,
+          limit: config.limitPerKeyword,
+          exhaustPages: true,
+        },
+        { skipListEnrichment: true },
+      );
+      if (result.blocked && !result.hits.length) {
         return {
           ownerKey,
           ok: false,
@@ -167,33 +186,64 @@ export async function runDailyExpiryScanForOwner(
           nearExpiry: 0,
           newForEmail: 0,
           emailed: false,
-          error: result.blocked ?? "Búsqueda TuGaceta falló",
+          capped: anyCapped,
+          error: result.blocked,
           hits: listDailyScanHits(ownerKey),
+          sample: null,
         };
       }
+      if (result.capped) anyCapped = true;
       rawHits += result.hits.length;
 
-      // Enrich a bounded set so serverless stays within maxDuration.
-      const candidates = result.hits.slice(0, Math.min(result.hits.length, 40));
-      for (const hit of candidates) {
-        const digits = (hit.expediente ?? "").replace(/\D/g, "");
-        if (digits.length < 5) continue;
+      // Infer expiry from list datos for ALL hits (no 40-cap). GetFichaInfo
+      // only for near-expiry rows missing Denominación.
+      const nearCandidates: {
+        hit: SearchHit;
+        expiryDate: string;
+        expediente: string;
+      }[] = [];
+      for (const hit of result.hits) {
+        const digits = (
+          hit.expediente ||
+          hit.registro ||
+          hit.rawDatos?.["Registro de Marca"] ||
+          hit.rawDatos?.["Registro de Aviso Comercial"] ||
+          hit.rawDatos?.["Registro de Nombre Comercial"] ||
+          ""
+        ).replace(/\D/g, "");
         const expediente =
-          digits.length >= 7 ? digits.slice(0, 7) : digits.padStart(7, "0");
+          digits.length >= 5
+            ? digits.length >= 7
+              ? digits.slice(0, 7)
+              : digits.padStart(7, "0")
+            : hit.fichaId
+              ? `F${hit.fichaId}`
+              : "";
+        if (!expediente || byExpediente.has(expediente)) continue;
+
+        const expiryDate = expiryFromHit(hit, idArea);
+        if (!expiryDate || !withinDays(expiryDate, config.daysWindow)) continue;
+        nearCandidates.push({ hit, expiryDate, expediente });
+      }
+
+      // Bound detail fetches so serverless stays within maxDuration.
+      const toEnrich = nearCandidates.slice(0, 120);
+      for (const { hit, expiryDate, expediente } of toEnrich) {
         if (byExpediente.has(expediente)) continue;
 
-        const { hit: enriched, expiryDate } = await enrichExpiry(hit, idArea);
-        if (!expiryDate || !withinDays(expiryDate, config.daysWindow)) continue;
+        const enriched = await enrichNearExpiryHit(hit);
+        const finalExpiry = expiryFromHit(enriched, idArea) ?? expiryDate;
+        if (!withinDays(finalExpiry, config.daysWindow)) continue;
 
         const snapshot = searchHitToSnapshot(enriched, { idArea });
         snapshot.expediente = expediente;
-        snapshot.expiryDate = expiryDate;
+        snapshot.expiryDate = finalExpiry;
         const prev = previous.get(expediente);
         byExpediente.set(expediente, {
           expediente,
           markName: snapshot.markName,
           classNice: snapshot.classNice,
-          expiryDate,
+          expiryDate: finalExpiry,
           fichaId: enriched.fichaId ?? null,
           snapshot,
           emailed: Boolean(prev?.emailed),
@@ -209,8 +259,10 @@ export async function runDailyExpiryScanForOwner(
       nearExpiry: 0,
       newForEmail: 0,
       emailed: false,
+      capped: anyCapped,
       error: error instanceof Error ? error.message : String(error),
       hits: listDailyScanHits(ownerKey),
+      sample: null,
     };
   }
 
@@ -241,6 +293,16 @@ export async function runDailyExpiryScanForOwner(
     }
   }
 
+  const first = stored[0];
+  const sample = first
+    ? {
+        expediente: first.expediente,
+        markName: first.markName,
+        expiryDate: first.expiryDate,
+        daysLeft: daysLeftFromIso(first.expiryDate),
+      }
+    : null;
+
   return {
     ownerKey,
     ok: true,
@@ -250,7 +312,9 @@ export async function runDailyExpiryScanForOwner(
     newForEmail: newForEmail.length,
     emailed,
     emailMode,
+    capped: anyCapped,
     hits: listDailyScanHits(ownerKey),
+    sample,
   };
 }
 
@@ -282,6 +346,7 @@ export async function runDailyExpiryScanForCron(): Promise<
         error:
           "Sin owners con escaneo diario activo (guarda filtros en Ajustes o IMPI_DAILY_SCAN_CONFIG)",
         hits: [],
+        sample: null,
       },
     ];
   }

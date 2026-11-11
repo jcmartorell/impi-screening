@@ -58,7 +58,7 @@ function mockSearch(filters: SearchFilters): SearchResponse {
     });
   }
 
-  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 500);
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 12_000);
   return {
     ok: true,
     mode: "mock",
