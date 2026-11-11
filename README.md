@@ -99,9 +99,10 @@ En modo `live`/`auto`, fallos del portal se muestran (502 + inbox) — **nunca**
 
 ### Alertas por correo
 
-1. En **Seguimiento / monitoreo → Ajustes de alertas**, pega el correo destino (vacío = no envía).
+1. En **Seguimiento / monitoreo → Ajustes de alertas**, el correo predeterminado es `ap.vidaln@gmail.com` (editable; vacío = no envía).
 2. Configura en Vercel `RESEND_API_KEY` (preferido) o `SMTP_*`. Sin clave, el servidor solo registra el email en logs.
 3. `vercel.json` programa cron cada 6 h → `/api/cron/refresh` (solo lista de seguimiento; no busca).
+4. Lista **Vencen ≤ 30 días** bajo la cartera de seguimiento.
 
 ## Auth
 

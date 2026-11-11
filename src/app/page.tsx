@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { AlertSettings } from "@/components/dashboard/alert-settings";
+import { ExpiringPanel } from "@/components/dashboard/expiring-panel";
 import { MarksTable } from "@/components/dashboard/marks-table";
 import { NotificationsPanel } from "@/components/dashboard/notifications-panel";
 import { RefreshButton } from "@/components/dashboard/refresh-button";
@@ -38,6 +39,7 @@ export default async function HomePage() {
 
   const marks = listTrackedMarks(viewer.ownerKey);
   const notifications = listNotifications(viewer.ownerKey, { limit: 30 });
+  const expiringSoon = listExpiringWithin(viewer.ownerKey, 30);
   const expiring = listExpiringWithin(viewer.ownerKey, 120);
   const settings = getOwnerSettings(viewer.ownerKey);
   const mode = getFetchMode();
@@ -121,13 +123,13 @@ export default async function HomePage() {
         </div>
         <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 px-4 py-3">
           <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-            Vencen ≤ 120 días
+            Vencen ≤ 30 días
           </p>
           <p className="mt-1 font-[family-name:var(--font-display)] text-3xl text-[color:var(--ink)]">
-            {expiring.length}
+            {expiringSoon.length}
           </p>
           <p className="mt-1 font-mono text-[11px] text-muted-foreground">
-            fetch mode: {mode}
+            ≤120d: {expiring.length} · fetch: {mode}
           </p>
         </div>
       </section>
@@ -176,6 +178,7 @@ export default async function HomePage() {
               </div>
               <MarksTable marks={marks} />
             </div>
+            <ExpiringPanel marks={expiringSoon} days={30} />
             <div className="rounded-xl border border-[color:var(--ink)]/10 bg-white/55 p-4 sm:p-5">
               <h2 className="mb-1 font-[family-name:var(--font-display)] text-lg text-[color:var(--ink)]">
                 Seguir por expediente
@@ -197,6 +200,7 @@ export default async function HomePage() {
               <AlertSettings
                 initialEmail={settings.alertEmail}
                 emailTransport={emailTransport}
+                usingDefault={settings.usingDefault}
               />
             </div>
           </div>

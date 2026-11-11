@@ -7,6 +7,7 @@ import type {
   TrackedMark,
   TrademarkSnapshot,
 } from "@/lib/types";
+import { DEFAULT_ALERT_EMAIL } from "@/lib/alert-defaults";
 import {
   MAX_HISTORY_PER_MARK,
   MAX_NOTIFICATIONS_PER_OWNER,
@@ -98,6 +99,8 @@ export type OwnerSettings = {
   ownerKey: string;
   alertEmail: string;
   updatedAt: string | null;
+  /** True when the value comes from DEFAULT_ALERT_EMAIL (no saved row yet). */
+  usingDefault: boolean;
 };
 
 export function getOwnerSettings(ownerKey: string): OwnerSettings {
@@ -106,12 +109,18 @@ export function getOwnerSettings(ownerKey: string): OwnerSettings {
     .prepare(`SELECT * FROM owner_settings WHERE owner_key = ?`)
     .get(ownerKey) as Record<string, unknown> | undefined;
   if (!row) {
-    return { ownerKey, alertEmail: "", updatedAt: null };
+    return {
+      ownerKey,
+      alertEmail: DEFAULT_ALERT_EMAIL,
+      updatedAt: null,
+      usingDefault: true,
+    };
   }
   return {
     ownerKey,
     alertEmail: String(row.alert_email ?? ""),
     updatedAt: row.updated_at ? String(row.updated_at) : null,
+    usingDefault: false,
   };
 }
 

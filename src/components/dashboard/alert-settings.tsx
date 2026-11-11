@@ -9,9 +9,11 @@ import { Label } from "@/components/ui/label";
 export function AlertSettings({
   initialEmail,
   emailTransport,
+  usingDefault = false,
 }: {
   initialEmail: string;
   emailTransport: "resend" | "smtp" | "log";
+  usingDefault?: boolean;
 }) {
   const router = useRouter();
   const [email, setEmail] = useState(initialEmail);
@@ -33,6 +35,7 @@ export function AlertSettings({
         error?: string;
         alertEmail?: string;
         emailTransport?: string;
+        usingDefault?: boolean;
       };
       if (!res.ok) {
         setError(data.error ?? "No se pudo guardar.");
@@ -57,14 +60,15 @@ export function AlertSettings({
           type="email"
           inputMode="email"
           autoComplete="email"
-          placeholder="tu@correo.com"
+          placeholder="ap.vidaln@gmail.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           className="max-w-md"
         />
         <p className="text-xs text-muted-foreground">
-          Vacío por defecto. Solo recibe email cuando hay cambio de estatus o
-          movimiento nuevo en expedientes en seguimiento (no en búsqueda).
+          Predeterminado: <code className="font-mono">ap.vidaln@gmail.com</code>
+          {usingDefault ? " (activo hasta que guardes otro)" : ""}. Editable;
+          vacío = no enviar. Solo por cambios en seguimiento (no búsqueda).
           Transporte:{" "}
           <code className="font-mono">
             {emailTransport === "log"

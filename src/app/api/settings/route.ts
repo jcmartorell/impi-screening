@@ -14,6 +14,7 @@ export async function GET(request: Request) {
   return jsonPrivate({
     alertEmail: settings.alertEmail,
     updatedAt: settings.updatedAt,
+    usingDefault: settings.usingDefault,
     emailTransport: describeTransport(),
   });
 }
@@ -50,6 +51,7 @@ export async function PATCH(request: Request) {
     ok: true,
     alertEmail: settings.alertEmail,
     updatedAt: settings.updatedAt,
+    usingDefault: settings.usingDefault,
     emailTransport: describeTransport(),
   });
 }
